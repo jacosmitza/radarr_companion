@@ -3,7 +3,8 @@
 **A 100% local-first Windows 10/11 Pro utility extending Radarr v3 for multi-drive movie libraries, smart duplicate elimination, stranded intake triage, collection management, and spinning-HDD maintenance.**
 
 > **Author:** Jaco Smit & Google Gemini  
-> **Runtime:** Local-only Python HTTP server (`http://127.0.0.1:8085`) with an offline, zero-dependency semantic HTML5 dashboard styled to match Radarr v3's dark theme.
+> **Runtime:** Local-only Python HTTP server (`http://127.0.0.1:8085`) with an offline, zero-dependency semantic HTML5 dashboard styled to match Radarr v3's dark theme.  
+> **User Manual:** [Download / View the PDF User Manual](Radarr_Companion_User_Manual.pdf)
 
 ---
 
