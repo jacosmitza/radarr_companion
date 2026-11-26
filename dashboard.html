@@ -1,0 +1,3845 @@
+<!--
+  Author: Jaco Smit & Google Gemini
+  Date: 2026-11-23
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Radarr Companion — Multi-Drive Movie Organiser</title>
+    <style>
+        :root {
+            /* Radarr v3 Dark Theme Palette */
+            --bg: #202020;
+            --sidebar-bg: #262626;
+            --topbar-bg: #2a2a2a;
+            --surface: #262626;
+            --surface-alt: #303030;
+            --border: #3a3a3a;
+            --text: #e6e6e6;
+            --muted: #9b9b9b;
+            --accent: #ffc230;
+            --accent-hover: #e5a919;
+            --blue: #5d9cec;
+            --green: #27c24c;
+            --amber: #f0ad4e;
+            --red: #f05050;
+            --sidebar-w: 224px;
+            --topbar-h: 58px;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: "Roboto", "Segoe UI", system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.48;
+            font-size: 14px;
+        }
+        /* Radarr App Shell: Fixed Left Sidebar + Top Header + Scrollable Main */
+        .app-shell {
+            display: flex;
+            min-height: 100vh;
+        }
+        aside.radarr-sidebar {
+            width: var(--sidebar-w);
+            flex-shrink: 0;
+            background: var(--sidebar-bg);
+            border-right: 1px solid #161616;
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            z-index: 20;
+        }
+        .sidebar-brand {
+            height: var(--topbar-h);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 18px;
+            background: #232323;
+            border-bottom: 1px solid #161616;
+        }
+        .brand-logo {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: var(--accent);
+            color: #1a1a1a;
+            font-weight: 900;
+            font-size: 16px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            letter-spacing: -0.5px;
+        }
+        .brand-text {
+            font-size: 16px;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.2px;
+        }
+        .brand-sub {
+            font-size: 10px;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            display: block;
+            margin-top: -2px;
+        }
+        nav.sidebar-nav {
+            flex: 1;
+            padding: 12px 0;
+            overflow-y: auto;
+        }
+        .nav-section-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.9px;
+            color: #777;
+            padding: 10px 18px 6px;
+        }
+        button.sidebar-item {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 18px;
+            background: transparent;
+            border: none;
+            border-left: 3px solid transparent;
+            border-radius: 0;
+            color: #cfcfcf;
+            font-size: 14px;
+            font-weight: 500;
+            text-align: left;
+            cursor: pointer;
+            transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+        }
+        button.sidebar-item:hover {
+            background: #2f2f2f;
+            color: #ffffff;
+        }
+        button.sidebar-item.active {
+            background: #303030;
+            color: var(--accent);
+            border-left-color: var(--accent);
+            font-weight: 600;
+        }
+        .sidebar-count {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 1px 7px;
+            border-radius: 999px;
+            background: #383838;
+            color: #e0e0e0;
+        }
+        button.sidebar-item.active .sidebar-count {
+            background: rgba(255, 194, 48, 0.18);
+            color: var(--accent);
+        }
+        .sidebar-footer {
+            padding: 12px 16px;
+            border-top: 1px solid #161616;
+            font-size: 11px;
+            color: var(--muted);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            background: #222222;
+        }
+        .sidebar-footer-links {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .workspace-col {
+            flex: 1;
+            margin-left: var(--sidebar-w);
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        header.radarr-topbar {
+            height: var(--topbar-h);
+            background: var(--topbar-bg);
+            border-bottom: 1px solid #161616;
+            padding: 0 22px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            position: sticky;
+            top: 0;
+            z-index: 15;
+        }
+        .topbar-search-wrap {
+            flex: 1;
+            max-width: 460px;
+            display: flex;
+            align-items: center;
+        }
+        .topbar-search-wrap input[type="search"] {
+            width: 100%;
+            background: #1c1c1c;
+            border: 1px solid #3c3c3c;
+            border-radius: 4px;
+            padding: 7px 12px;
+            font-size: 13px;
+            color: var(--text);
+        }
+        .topbar-search-wrap input[type="search"]:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .topbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        /* Radarr-style secondary action ribbon */
+        section.status-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            padding: 10px 22px;
+            background: #242424;
+            border-bottom: 1px solid #181818;
+            font-size: 12px;
+        }
+        main.radarr-main {
+            padding: 20px 24px 36px;
+            max-width: 1360px;
+            width: 100%;
+        }
+        .page-heading {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .page-heading h1 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 500;
+            color: #ffffff;
+        }
+        .results-bar {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 16px;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 16px 18px;
+        }
+        .card h2 {
+            margin: 0 0 12px 0;
+            font-size: 15px;
+            font-weight: 600;
+            color: #ffffff;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        .input-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        label.field-label {
+            display: block;
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 4px;
+            font-weight: 500;
+        }
+        label.check-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text);
+            cursor: pointer;
+            margin-bottom: 12px;
+        }
+        input[type="text"], input[type="search"], input[type="url"], input[type="password"], input[type="number"], input[type="time"], select {
+            flex: 1;
+            background: #1b1b1b;
+            color: var(--text);
+            border: 1px solid #404040;
+            border-radius: 4px;
+            padding: 8px 11px;
+            font-size: 13px;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        button {
+            background: var(--blue);
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 8px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        button:hover { filter: brightness(1.08); }
+        button:disabled { opacity: 0.48; cursor: not-allowed; filter: none; }
+        button.btn-green { background: var(--green); color: #fff; }
+        button.btn-amber { background: var(--accent); color: #1a1a1a; }
+        button.btn-danger { background: var(--red); padding: 5px 10px; font-size: 12px; }
+        button.btn-secondary { background: var(--surface-alt); border: 1px solid #454545; color: var(--text); }
+        button.btn-secondary:hover { background: #3b3b3b; }
+        button.btn-sm { padding: 5px 10px; font-size: 12px; }
+        .folder-list { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow-y: auto; }
+        .folder-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            background: #1d1d1d;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .badge-online { background: rgba(39, 194, 76, 0.16); color: #4ade80; border: 1px solid rgba(39, 194, 76, 0.3); }
+        .badge-offline { background: rgba(240, 80, 80, 0.16); color: #f87171; border: 1px solid rgba(240, 80, 80, 0.3); }
+        .badge-drive { background: rgba(93, 156, 236, 0.16); color: #7bb4f7; border: 1px solid rgba(93, 156, 236, 0.3); }
+        .badge-warn { background: rgba(255, 194, 48, 0.15); color: var(--accent); border: 1px solid rgba(255, 194, 48, 0.32); }
+        button.badge-btn {
+            border: 1px dashed currentColor;
+            padding: 2px 9px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            cursor: pointer;
+            line-height: 1.4;
+            background: transparent;
+        }
+        button.badge-btn:hover { filter: brightness(1.2); }
+        .naming-box {
+            background: #1b1b1b;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-family: Consolas, monospace;
+            font-size: 12px;
+            color: var(--accent);
+            word-break: break-all;
+            margin-top: 6px;
+            margin-bottom: 12px;
+        }
+        progress.maint-progress {
+            width: 100%;
+            height: 8px;
+            margin-top: 8px;
+            accent-color: var(--accent);
+        }
+        article.dup-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: 4px;
+            padding: 16px;
+            margin-bottom: 14px;
+        }
+        .dup-header {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        .dup-title { margin: 0; font-size: 16px; font-weight: 600; color: #fff; }
+        .file-row {
+            display: grid;
+            grid-template-columns: 128px 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 9px 12px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            background: #1d1d1d;
+            border-left: 3px solid var(--border);
+        }
+        .file-row.winner { border-left-color: var(--green); }
+        .file-row.loser { border-left-color: var(--red); }
+        .file-path {
+            font-family: Consolas, monospace;
+            font-size: 12px;
+            color: var(--muted);
+            word-break: break-all;
+        }
+        .file-specs { font-size: 13px; margin-top: 3px; color: var(--text); }
+        .rename-preview {
+            background: rgba(255, 194, 48, 0.06);
+            border: 1px solid rgba(255, 194, 48, 0.28);
+            border-radius: 4px;
+            padding: 8px 12px;
+            margin-top: 8px;
+            font-size: 12px;
+        }
+        .rename-preview code {
+            font-family: Consolas, monospace;
+            color: var(--accent);
+            word-break: break-all;
+        }
+        .score-pill {
+            font-size: 12px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 3px;
+            background: var(--surface-alt);
+        }
+        .action-bar {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #323232;
+            font-size: 13px;
+        }
+        .log-box {
+            background: #171717;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 12px;
+            max-height: 240px;
+            overflow-y: auto;
+            font-family: Consolas, monospace;
+            font-size: 12px;
+        }
+        .log-line { margin-bottom: 4px; }
+        .log-WARN { color: var(--accent); }
+        .log-ERROR { color: var(--red); }
+        .log-INFO { color: #d0d0d0; }
+        a, button.link-btn {
+            color: var(--accent);
+            text-decoration: none;
+            background: none;
+            border: none;
+            padding: 0;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        a:hover, button.link-btn:hover { text-decoration: underline; background: none; filter: none; }
+        /* Native HTML5 <dialog> Modal System (Radarr Dark Style) */
+        dialog.app-dialog {
+            background: #252525;
+            color: var(--text);
+            border: 1px solid #444;
+            border-radius: 4px;
+            max-width: 940px;
+            width: calc(100% - 40px);
+            max-height: 90vh;
+            overflow-y: auto;
+            padding: 20px 22px;
+            box-shadow: 0 20px 55px rgba(0, 0, 0, 0.78);
+        }
+        dialog.app-dialog.modal-lg { max-width: 1140px; }
+        dialog.app-dialog.modal-xl { max-width: 1280px; width: calc(100% - 28px); }
+        dialog.app-dialog.modal-sm { max-width: 520px; }
+        dialog.app-dialog.modal-xl .folder-list { max-height: 460px; }
+        dialog.app-dialog::backdrop {
+            background: rgba(0, 0, 0, 0.72);
+            backdrop-filter: blur(2px);
+        }
+        .tab-bar {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 14px;
+            border-bottom: 1px solid var(--border);
+        }
+        .tab-btn {
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            border-radius: 0;
+            color: var(--muted);
+            padding: 8px 14px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .tab-btn:hover { color: #fff; background: #2d2d2d; filter: none; }
+        .tab-btn.active {
+            background: transparent;
+            border-bottom-color: var(--accent);
+            color: var(--accent);
+        }
+        .coll-card {
+            background: #1d1d1d;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 14px;
+            margin-bottom: 10px;
+        }
+        .coll-card-head {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        .coll-movie-list {
+            max-height: 150px;
+            overflow-y: auto;
+            font-size: 12px;
+            color: var(--muted);
+            border-top: 1px solid #303030;
+            padding-top: 8px;
+            margin-top: 8px;
+        }
+        .movie-picker-box {
+            max-height: 210px;
+            overflow-y: auto;
+            background: #181818;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 8px;
+            margin-bottom: 10px;
+        }
+        .movie-pick-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 2px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .tag-chip-box {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            max-height: 120px;
+            overflow-y: auto;
+            background: #181818;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 8px;
+            margin-bottom: 10px;
+        }
+        .tag-chip-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: #272727;
+            border: 1px solid #444;
+            border-radius: 3px;
+            padding: 3px 9px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .tag-chip-label:hover { border-color: var(--accent); }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        .modal-header h3 { margin: 0; font-size: 17px; font-weight: 600; color: var(--accent); }
+        output.status-output { font-size: 13px; color: var(--muted); display: inline-block; }
+        /* Live Job & File Transfer Progress Panel */
+        .job-banner {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--blue);
+            border-radius: 4px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+        }
+        .job-banner.is-active { border-left-color: var(--accent); }
+        .job-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+        progress.job-progress {
+            width: 100%;
+            height: 8px;
+            accent-color: var(--accent);
+            display: block;
+            margin-bottom: 8px;
+        }
+        progress.file-progress {
+            width: 100%;
+            height: 7px;
+            accent-color: var(--green);
+            display: block;
+        }
+        /* Bottom-Right Drive Storage Pie Charts (100x100px per drive) */
+        section.drive-pies-dock {
+            position: fixed;
+            right: 18px;
+            bottom: 18px;
+            z-index: 12;
+            background: rgba(34, 34, 34, 0.94);
+            border: 1px solid #3f3f3f;
+            border-radius: 6px;
+            padding: 10px 12px;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+            max-width: calc(100vw - 260px);
+        }
+        .drive-pies-title {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--muted);
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+        .drive-pies-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        .drive-pie-card {
+            width: 100px;
+            height: 100px;
+            background: #1b1b1b;
+            border: 1px solid #383838;
+            border-radius: 6px;
+            padding: 5px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            text-align: center;
+        }
+        .drive-pie-card.offline { border-color: rgba(240, 80, 80, 0.5); opacity: 0.8; }
+        .drive-pie-svg { width: 58px; height: 58px; display: block; }
+        .drive-pie-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: #fff;
+            margin-top: 2px;
+            line-height: 1.1;
+        }
+        .drive-pie-sub {
+            font-size: 9px;
+            color: var(--muted);
+            line-height: 1.15;
+            white-space: nowrap;
+        }
+        main.radarr-main { padding-bottom: 165px; }
+        @media (max-width: 820px) {
+            aside.radarr-sidebar { position: static; width: 100%; border-right: none; border-bottom: 1px solid #161616; }
+            .app-shell { flex-direction: column; }
+            .workspace-col { margin-left: 0; }
+            section.drive-pies-dock { position: static; margin: 16px 24px 24px; max-width: none; }
+            main.radarr-main { padding-bottom: 24px; }
+        }
+    </style>
+</head>
+<body>
+<div class="app-shell">
+    <!-- Radarr-style Left Navigation Sidebar -->
+    <aside class="radarr-sidebar" aria-label="Main navigation">
+        <div class="sidebar-brand">
+            <span class="brand-logo" aria-hidden="true">R</span>
+            <div>
+                <span class="brand-text">Radarr</span>
+                <span class="brand-sub">Companion v1.0</span>
+            </div>
+        </div>
+        <nav class="sidebar-nav" aria-label="Primary sections">
+            <div class="nav-section-label">Library</div>
+            <button type="button" class="sidebar-item active" id="navQueueBtn">
+                <span>Queue &amp; Duplicates</span>
+            </button>
+            <button type="button" class="sidebar-item" id="openCollectionsBtn">
+                <span>Collections</span>
+            </button>
+            <button type="button" class="sidebar-item" id="openLibraryBtn">
+                <span>Library &amp; Drives</span>
+                <span class="sidebar-count" id="folderCountBadge">0</span>
+            </button>
+
+            <div class="nav-section-label">System</div>
+            <button type="button" class="sidebar-item" id="openJobQueueBtn">
+                <span>Job Queue</span>
+                <span class="sidebar-count" id="jobQueueCountBadge">0</span>
+            </button>
+            <button type="button" class="sidebar-item" id="openQuarantineBtn">
+                <span>Quarantine</span>
+                <span class="sidebar-count" id="quarantineCountBadge">0</span>
+            </button>
+            <button type="button" class="sidebar-item" id="openMaintenanceBtn">
+                <span>HDD Maintenance</span>
+            </button>
+            <button type="button" class="sidebar-item" id="navLogsBtn">
+                <span>Activity Log</span>
+            </button>
+            <button type="button" class="sidebar-item" id="openSettingsBtn">
+                <span>Settings</span>
+            </button>
+        </nav>
+        <div class="sidebar-footer">
+            <span>Windows 10 Pro &bull; Local-First</span>
+            <div class="sidebar-footer-links">
+                <button type="button" class="link-btn" id="openAboutBtn">About / Privacy</button>
+                <a href="https://ko-fi.com/mrdiealotza" target="_blank" rel="noopener noreferrer">Donate</a>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Right Workspace Column: Sticky Topbar + Status Ribbon + Main View -->
+    <div class="workspace-col">
+        <header class="radarr-topbar">
+            <div class="topbar-search-wrap">
+                <input type="search" id="globalSearchInput" placeholder="Search duplicates &amp; stranded intake by movie, year, drive, or path..." aria-label="Search movies">
+            </div>
+            <div class="topbar-actions">
+                <button type="button" id="scanBtn" class="btn-amber">Scan All Online Drives</button>
+            </div>
+        </header>
+
+        <!-- Compact Live Status Ribbon -->
+        <section class="status-strip" aria-label="System status" aria-live="polite">
+            <span id="capBadge" class="badge badge-drive">Checking engine...</span>
+            <span id="radarrKeyBadge" class="badge badge-warn">Radarr Key: Not Set</span>
+            <span id="renameBadge" class="badge badge-online">Auto-Rename: ON</span>
+            <span id="retentionBadge" class="badge badge-drive">Log Retention: 30d</span>
+            <span id="maintBadge" class="badge badge-warn">HDD Defrag: OFF</span>
+            <button type="button" id="jobStatusBadge" class="badge-btn badge-drive" title="Click to open the Job Queue and activity history">Activity: Idle</button>
+            <span id="offlineDrivesBadge" class="badge badge-offline" style="display:none;">Offline: None</span>
+            <button type="button" id="missingFoldersBadge" class="badge-btn badge-warn" style="display:none;" title="Click to recreate or ignore deleted folders on online drives">Missing Folders: 0</button>
+        </section>
+
+        <main class="radarr-main">
+            <!-- Live Current Action / Status & Progress Panel -->
+            <section id="jobProgressBanner" class="job-banner" aria-label="Current action and progress" aria-live="polite">
+                <div class="job-row">
+                    <span><strong id="jobTitleLabel" style="color:var(--accent);">Current Status:</strong> <span id="jobStatusText">Idle &mdash; ready.</span></span>
+                    <strong id="jobOverallPctLabel">0%</strong>
+                </div>
+                <progress id="jobOverallBar" class="job-progress" value="0" max="100"></progress>
+                <div id="fileProgressWrap" style="display:none;">
+                    <div class="job-row" style="color:var(--muted);">
+                        <span id="fileTransferLabel">File transfer: ...</span>
+                        <strong id="fileTransferPctLabel" style="color:var(--green);">0%</strong>
+                    </div>
+                    <progress id="fileTransferBar" class="file-progress" value="0" max="100"></progress>
+                </div>
+            </section>
+
+            <!-- Duplicate Review Queue & Approve All Toolbar -->
+            <section id="duplicatesSection" aria-label="Duplicate review queue">
+                <div class="page-heading">
+                    <h1>Movies &mdash; Duplicate Review &amp; Intake Triage</h1>
+                    <div id="bulkActionWrap" style="display:none; gap:8px; align-items:center;">
+                        <button type="button" id="approveAllBtn" class="btn-amber">Approve All Safe Swaps</button>
+                    </div>
+                </div>
+                <div class="results-bar">
+                    <output id="resultsSummary" style="font-size: 13px; color: var(--muted);">
+                        Configure your folders in <strong>Library &amp; Drives</strong> and Radarr API key in <strong>Settings</strong>, then click <strong>Scan All Online Drives</strong>.
+                    </output>
+                </div>
+                <div id="duplicatesContainer"></div>
+            </section>
+
+            <!-- Stranded Blackhole Intake Triage Queue (Sweep to Staging Root) -->
+            <section id="intakeSection" style="display:none; margin-top:22px;" aria-label="Stranded intake triage queue">
+                <div class="results-bar">
+                    <div>
+                        <h2 style="margin:0; font-size:17px; color:var(--accent);">
+                            Stranded Intake Movies <span id="intakeCountBadge" class="badge badge-warn">0</span>
+                        </h2>
+                        <div style="font-size:12px; color:var(--muted);">
+                            New movies left in your Download / Intake folder &bull; Organises into <code>Movie (Year)</code> folders, moves subtitles &amp; cleans clutter.
+                        </div>
+                    </div>
+                    <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                        <label for="stagingRootSelect" style="font-size:12px; color:var(--muted);">Staging Root:</label>
+                        <select id="stagingRootSelect" style="min-width:220px;" aria-label="Default staging root folder"></select>
+                        <button type="button" class="btn-secondary btn-sm" id="browseStagingBtn" title="Browse for any local folder to use as your new-movie staging root">Browse...</button>
+                        <button type="button" id="approveAllIntakeBtn" class="btn-green">Approve All Safe Imports</button>
+                    </div>
+                </div>
+                <div id="intakeContainer"></div>
+            </section>
+
+            <!-- Persistent On-Drive Activity Log (Hidden by default; toggle via sidebar) -->
+            <section id="activityLogSection" class="card" style="display:none; margin-top: 22px;" aria-label="Activity log">
+                <h2>
+                    <span>Activity Log <span id="logPathHint" style="font-size:11px; font-weight:400; color:var(--muted); font-family:Consolas, monospace;"></span></span>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" class="btn-secondary btn-sm" id="trimLogsBtn">Trim Expired Logs</button>
+                        <button type="button" class="btn-secondary btn-sm" id="hideLogsBtn">Hide</button>
+                    </div>
+                </h2>
+                <div id="logBox" class="log-box" role="log" aria-live="polite"></div>
+            </section>
+        </main>
+
+        <!-- Bottom-Right Drive Storage Pie Charts (100x100px per drive) -->
+        <section id="drivePiesDock" class="drive-pies-dock" style="display:none;" aria-label="Drive storage overview">
+            <div class="drive-pies-title">
+                <span>Drive Storage</span>
+                <span style="font-size:10px; color:#777;">Used / Free</span>
+            </div>
+            <div id="drivePiesGrid" class="drive-pies-grid"></div>
+        </section>
+    </div>
+</div>
+
+<!-- 1. SETTINGS DIALOG -->
+<dialog id="settingsModal" class="app-dialog" aria-labelledby="settingsModalTitle">
+    <div class="modal-header">
+        <h3 id="settingsModalTitle">Settings — Radarr Integration, Renaming &amp; Logging</h3>
+        <button type="button" class="btn-secondary btn-sm" data-close-dialog="settingsModal">Close</button>
+    </div>
+    <form id="settingsForm">
+        <div class="grid-2">
+            <div>
+                <label class="field-label" for="radarrUrl">Radarr Local URL</label>
+                <div class="input-row">
+                    <input type="url" id="radarrUrl" placeholder="http://127.0.0.1:7878" required>
+                </div>
+
+                <label class="field-label" for="radarrApiKey">Radarr API Key (DPAPI-encrypted in config.json)</label>
+                <div class="input-row">
+                    <input type="password" id="radarrApiKey" autocomplete="off" placeholder="Enter API key (leave blank to keep saved)">
+                    <button type="button" id="clearApiKeyBtn" class="btn-danger" style="display:none; white-space:nowrap;" title="Remove the DPAPI-encrypted Radarr API key from config.json">Clear Saved Key</button>
+                </div>
+
+                <label class="check-label" for="autoRenameToggle" style="color:var(--muted); font-size:12px;">
+                    <input type="checkbox" id="autoRenameToggle" checked>
+                    <span><strong>Feature 2:</strong> Auto-rename promoted files to match Radarr's naming format</span>
+                </label>
+            </div>
+            <div>
+                <label class="field-label" for="quarantineMode">Inferior Duplicate Safety Mode</label>
+                <div class="input-row">
+                    <select id="quarantineMode">
+                        <option value="recycle_bin">Windows Recycle Bin (Recommended)</option>
+                        <option value="drive_quarantine">Drive-Local _RadarrCompanion_Quarantine Folder</option>
+                    </select>
+                </div>
+
+                <label class="field-label" for="logRetentionDays">Log File Retention Period (Days — default 30)</label>
+                <div class="input-row">
+                    <input type="number" id="logRetentionDays" min="1" max="3650" value="30" required>
+                </div>
+
+                <label class="field-label">Active Radarr Naming Format (<code>/api/v3/config/naming</code>)</label>
+                <div id="namingFormatDisplay" class="naming-box">Not synced yet — click Test Connection</div>
+            </div>
+        </div>
+        <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; margin-top:16px; padding-top:14px; border-top:1px solid var(--border);">
+            <output id="settingsStatus" class="status-output" aria-live="polite"></output>
+            <div style="display:flex; gap:10px;">
+                <button type="button" class="btn-secondary" id="testRadarrBtn">Test Radarr Connection</button>
+                <button type="submit" class="btn-green">Save Settings</button>
+            </div>
+        </div>
+    </form>
+</dialog>
+
+<!-- 2. LIBRARY & DRIVES DIALOG -->
+<dialog id="libraryModal" class="app-dialog modal-xl" aria-labelledby="libraryModalTitle">
+    <div class="modal-header">
+        <h3 id="libraryModalTitle">Library &amp; Download Drives</h3>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <button type="button" class="btn-green btn-sm" id="syncRadarrBtn">Sync Root Folders from Radarr</button>
+            <button type="button" class="btn-secondary btn-sm" data-close-dialog="libraryModal">Close</button>
+        </div>
+    </div>
+    <output id="librarySyncStatus" class="status-output" style="display:block; margin-bottom:12px;" aria-live="polite"></output>
+    <div class="grid-2">
+        <section class="card" style="background:var(--bg);" aria-label="Established library folders">
+            <h2>Established Library Folders <span class="badge badge-drive">Destinations</span></h2>
+            <div class="input-row">
+                <input type="text" id="newLibPath" placeholder="e.g. D:\Movies or click Sync" aria-label="New library folder path">
+                <button type="button" id="addLibBtn">Add</button>
+            </div>
+            <ul id="libraryList" class="folder-list"></ul>
+        </section>
+        <section class="card" style="background:var(--bg);" aria-label="Download and intake folders">
+            <h2>Download / Intake Folders <span class="badge badge-warn">Sources</span></h2>
+            <div class="input-row">
+                <input type="text" id="newDlPath" placeholder="e.g. C:\Downloads\Movies or G:\Manual" aria-label="New download intake folder path">
+                <button type="button" class="btn-secondary" id="browseDlBtn">Browse...</button>
+                <button type="button" id="addDlBtn">Add</button>
+            </div>
+            <ul id="downloadList" class="folder-list"></ul>
+        </section>
+    </div>
+    <section class="card" style="background:var(--bg); margin-top:16px;" aria-label="Default staging root folder">
+        <h2>Default New-Movie Staging Folder <span class="badge badge-online">Intake Target</span></h2>
+        <p style="font-size:12px; color:var(--muted); margin:0 0 8px 0;">
+            Optional destination folder where stranded new downloads are organised before you sort them in Radarr (e.g. a dedicated "New Movies" root folder).
+        </p>
+        <div class="input-row" style="margin-bottom:0;">
+            <input type="text" id="stagingFolderInput" placeholder="Select or browse for a staging root folder..." aria-label="Default staging folder path">
+            <button type="button" class="btn-secondary" id="browseLibStagingBtn">Browse...</button>
+            <button type="button" class="btn-green" id="saveStagingFolderBtn">Save</button>
+        </div>
+    </section>
+</dialog>
+
+<!-- 3. LIBRARY MAINTENANCE DIALOG (SPINNING HDD MOVIE DEFRAG) -->
+<dialog id="maintenanceModal" class="app-dialog" aria-labelledby="maintenanceModalTitle">
+    <div class="modal-header">
+        <h3 id="maintenanceModalTitle">Library Maintenance — Spinning HDD Defragmentation</h3>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <button type="button" class="btn-secondary btn-sm" id="refreshDrivesBtn">Refresh Drives</button>
+            <button type="button" class="btn-secondary btn-sm" data-close-dialog="maintenanceModal">Close</button>
+        </div>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin:0 0 14px 0;">
+        Automatically detects physical drive media types via Windows PowerShell (<code>Get-PhysicalDisk</code>).
+        <strong>SSDs and unverified drives are strictly skipped</strong>.
+        Uses Sysinternals <code>contig64.exe</code> (file-level movie defrag) if available, and automatically falls back to Windows built-in <code>defrag.exe</code> (drive-level HDD defrag) otherwise.
+        Scheduled runs trigger automatically while Radarr Companion is open.
+    </p>
+
+    <div class="grid-2">
+        <form id="maintenanceForm" class="card" style="background:var(--bg);">
+            <h2>Schedule &amp; Contig Engine <span id="contigStatusBadge" class="badge badge-warn">Checking...</span></h2>
+            <label class="check-label" for="maintEnabled">
+                <input type="checkbox" id="maintEnabled">
+                <span>Enable scheduled HDD movie defragmentation</span>
+            </label>
+
+            <label class="field-label" for="maintSchedule">Schedule Frequency</label>
+            <div class="input-row">
+                <select id="maintSchedule">
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="biweekly">Bi-Weekly (Every 2 Weeks)</option>
+                    <option value="monthly">Monthly</option>
+                </select>
+            </div>
+
+            <div id="maintDowWrap">
+                <label class="field-label" for="maintDayOfWeek">Day of Week</label>
+                <div class="input-row">
+                    <select id="maintDayOfWeek">
+                        <option value="Monday">Monday</option>
+                        <option value="Tuesday">Tuesday</option>
+                        <option value="Wednesday">Wednesday</option>
+                        <option value="Thursday">Thursday</option>
+                        <option value="Friday">Friday</option>
+                        <option value="Saturday">Saturday</option>
+                        <option value="Sunday">Sunday</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="maintDomWrap" style="display:none;">
+                <label class="field-label" for="maintDayOfMonth">Day of Month (1–28)</label>
+                <div class="input-row">
+                    <input type="number" id="maintDayOfMonth" min="1" max="28" value="1">
+                </div>
+            </div>
+
+            <label class="field-label" for="maintTime">Run Time (24-Hour Local Time)</label>
+            <div class="input-row">
+                <input type="time" id="maintTime" value="03:00" required>
+            </div>
+
+            <label class="field-label" for="contigPath">Sysinternals <code>contig64.exe</code> Path (optional if placed in app folder or PATH)</label>
+            <div class="input-row">
+                <input type="text" id="contigPath" placeholder="e.g. C:\Tools\Sysinternals\contig64.exe">
+                <button type="button" class="btn-secondary" id="browseContigBtn">Browse...</button>
+            </div>
+            <div id="contigResolvedHint" style="font-size:12px; color:var(--muted); margin-bottom:12px; font-family:Consolas, monospace;"></div>
+
+            <button type="submit" class="btn-green">Save Maintenance Schedule</button>
+        </form>
+
+        <section class="card" style="background:var(--bg);" aria-label="Drive eligibility and maintenance status">
+            <h2>Drive Eligibility &amp; Live Status</h2>
+            <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">
+                <div>Next Scheduled Run: <strong id="maintNextRun" style="color:var(--text);">Disabled</strong></div>
+                <div>Last Completed Run: <strong id="maintLastRun" style="color:var(--text);">Never</strong></div>
+            </div>
+
+            <div id="maintProgressBox" class="naming-box" style="margin-bottom:12px; color:var(--text);" aria-live="polite">
+                <div id="maintProgressText">Status: Idle</div>
+                <progress id="maintProgressBar" class="maint-progress" value="0" max="1" style="display:none;"></progress>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-bottom:14px;">
+                <button type="button" id="maintRunNowBtn" class="btn-amber">Run HDD Defrag Now</button>
+                <button type="button" id="maintStopBtn" class="btn-danger" style="display:none; padding:9px 14px; font-size:13px;">Stop After Current File</button>
+            </div>
+
+            <label class="field-label">Configured Library Drives (Auto SSD Protection)</label>
+            <ul id="maintDriveList" class="folder-list" style="margin-top:6px; max-height:200px;"></ul>
+        </section>
+    </div>
+    <output id="maintFeedback" class="status-output" style="display:block; margin-top:12px;" aria-live="polite"></output>
+</dialog>
+
+<!-- 4. COLLECTIONS MANAGER DIALOG -->
+<dialog id="collectionsModal" class="app-dialog modal-lg" aria-labelledby="collectionsModalTitle">
+    <div class="modal-header">
+        <h3 id="collectionsModalTitle">Collections Manager — Bulk Move, Bulk Delete &amp; Custom Collections</h3>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <button type="button" class="btn-secondary btn-sm" id="refreshCollectionsBtn">Refresh from Radarr</button>
+            <button type="button" class="btn-secondary btn-sm" data-close-dialog="collectionsModal">Close</button>
+        </div>
+    </div>
+
+    <div class="tab-bar" role="tablist">
+        <button type="button" class="tab-btn active" id="tabNativeBtn" role="tab" aria-selected="true">Native Radarr Collections (<span id="nativeCollCount">0</span>)</button>
+        <button type="button" class="tab-btn" id="tabCustomBtn" role="tab" aria-selected="false">Custom Collections (<span id="customCollCount">0</span>)</button>
+    </div>
+
+    <output id="collectionsStatus" class="status-output" style="display:block; margin-bottom:12px;" aria-live="polite"></output>
+
+    <div class="input-row">
+        <input type="search" id="collectionsSearchInput" placeholder="Search collections or movies (by collection name, movie title, year, tag, or drive)..." aria-label="Search collections or movies">
+        <button type="button" class="btn-secondary" id="filterMisplacedBtn" aria-pressed="false" title="Show only collections and movies that are NOT currently inside the collection's root folder" style="white-space:nowrap;">Not in Collection Root Only: OFF</button>
+    </div>
+
+    <!-- Native Collections Panel -->
+    <section id="nativeCollectionsPanel" aria-label="Native Radarr collections">
+        <div id="nativeCollectionsList"></div>
+    </section>
+
+    <!-- Custom Collections Panel -->
+    <section id="customCollectionsPanel" style="display:none;" aria-label="Custom collections">
+        <div class="grid-2" style="align-items:start;">
+            <form id="customCollectionForm" class="card" style="background:var(--bg);">
+                <h2 id="customFormHeading">Create Custom Collection</h2>
+                <input type="hidden" id="customCollId" value="">
+
+                <label class="field-label" for="customCollName">Collection Name (e.g. Marvel MCU Movies, DCU Movies)</label>
+                <div class="input-row">
+                    <input type="text" id="customCollName" placeholder="e.g. Marvel MCU Movies" required>
+                </div>
+
+                <label class="field-label" for="customCollTag">Add New / Extra Radarr Tag(s) (comma-separated, optional)</label>
+                <div class="input-row">
+                    <input type="text" id="customCollTag" placeholder="e.g. mcu, phase1">
+                </div>
+
+                <label class="field-label">Collect / Link Existing Radarr Tags (<span id="customTagSelectedCount">0</span> selected)</label>
+                <div id="customTagPicker" class="tag-chip-box"></div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                    <button type="button" class="btn-secondary btn-sm" id="collectMoviesFromTagsBtn">Collect Movies from Selected Tags</button>
+                </div>
+
+                <label class="check-label" for="customCollSyncTag" style="font-size:12px; color:var(--muted);">
+                    <input type="checkbox" id="customCollSyncTag">
+                    <span>Apply selected tag(s) to all movies in this collection inside Radarr on save</span>
+                </label>
+
+                <label class="field-label" for="customCollRootFolder">Custom Collection Root Folder (Optional — auto-registers in Radarr)</label>
+                <div class="input-row">
+                    <input type="text" id="customCollRootFolder" placeholder="e.g. D:\Media\Movies - Marvel MCU">
+                    <button type="button" class="btn-secondary btn-sm" id="browseCustomCollRootBtn">Browse...</button>
+                    <button type="button" class="btn-amber btn-sm" id="openCreateFormRootBtn" title="Create a new folder on disk and register it as a Radarr root folder">+ Create Root...</button>
+                </div>
+
+                <label class="field-label" for="customMovieSearch">Select Movies from Your Radarr Library (<span id="customSelectedCount">0</span> selected)</label>
+                <div class="input-row">
+                    <input type="text" id="customMovieSearch" placeholder="Search movies by title or year...">
+                </div>
+                <div id="customMoviePicker" class="movie-picker-box"></div>
+
+                <div style="display:flex; gap:8px;">
+                    <button type="submit" class="btn-green">Save Custom Collection</button>
+                    <button type="button" class="btn-secondary" id="resetCustomFormBtn">New / Reset</button>
+                </div>
+            </form>
+
+            <section class="card" style="background:var(--bg);" aria-label="Saved custom collections">
+                <h2>Saved Custom Collections</h2>
+                <div id="customCollectionsList"></div>
+            </section>
+        </div>
+    </section>
+</dialog>
+
+<!-- 5. BULK DELETE COLLECTION CONFIRMATION DIALOG -->
+<dialog id="bulkDeleteModal" class="app-dialog modal-sm" aria-labelledby="bulkDeleteTitle">
+    <div class="modal-header">
+        <h3 id="bulkDeleteTitle" style="color:var(--red);">Confirm Bulk Delete Collection</h3>
+        <button type="button" class="btn-secondary btn-sm" data-close-dialog="bulkDeleteModal">Cancel</button>
+    </div>
+    <p id="bulkDeleteSummary" style="font-size:14px; margin-top:0;"></p>
+    <form id="bulkDeleteForm">
+        <label class="check-label" for="bulkDelFilesChk">
+            <input type="checkbox" id="bulkDelFilesChk">
+            <span><strong>Quarantine / Recycle movie files on disk</strong> (uses your configured Recycle Bin / Quarantine safety mode)</span>
+        </label>
+        <label class="check-label" for="bulkDelExclChk">
+            <input type="checkbox" id="bulkDelExclChk" checked>
+            <span><strong>Add movies to Radarr Import Exclusion list</strong> (prevents Radarr from re-downloading this collection)</span>
+        </label>
+        <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px; padding-top:12px; border-top:1px solid var(--border);">
+            <button type="button" class="btn-secondary" data-close-dialog="bulkDeleteModal">Cancel</button>
+            <button type="submit" class="btn-danger" id="confirmBulkDeleteBtn" style="padding:9px 16px; font-size:14px;">Confirm Bulk Delete</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- 6. CREATE MISSING ROOT FOLDER CONFIRMATION DIALOG -->
+<dialog id="createRootModal" class="app-dialog modal-sm" aria-labelledby="createRootTitle">
+    <div class="modal-header">
+        <h3 id="createRootTitle" style="color:var(--amber);">Create Missing Target Folder?</h3>
+        <button type="button" class="btn-secondary btn-sm" data-close-dialog="createRootModal">Cancel</button>
+    </div>
+    <p id="createRootSummary" style="font-size:14px; margin-top:0;"></p>
+    <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px; padding-top:12px; border-top:1px solid var(--border);">
+        <button type="button" class="btn-secondary" data-close-dialog="createRootModal">Cancel</button>
+        <button type="button" class="btn-green" id="confirmCreateRootBtn">Create Folder &amp; Move Movies</button>
+    </div>
+</dialog>
+
+<!-- 6b. CREATE CUSTOM COLLECTION ROOT FOLDER DIALOG -->
+<dialog id="createCustomRootModal" class="app-dialog modal-sm" aria-labelledby="createCustomRootTitle">
+    <div class="modal-header">
+        <h3 id="createCustomRootTitle" style="color:var(--accent);">Create Custom Collection Root Folder</h3>
+        <button type="button" class="btn-secondary btn-sm" data-close-dialog="createCustomRootModal">Cancel</button>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin:0 0 12px 0;">
+        Creates a dedicated folder on disk, registers it as a Radarr Root Folder, adds it to your Library folders, and links it to this Custom Collection.
+    </p>
+    <form id="createCustomRootForm">
+        <input type="hidden" id="createCustomRootTargetId" value="">
+        <input type="hidden" id="createCustomRootTargetName" value="">
+        <input type="hidden" id="createCustomRootMode" value="card">
+
+        <label class="field-label" for="createCustomRootParent">Parent Folder / Drive Path</label>
+        <div class="input-row">
+            <input type="text" id="createCustomRootParent" placeholder="e.g. D:\Media" required>
+            <button type="button" class="btn-secondary btn-sm" id="browseCreateCustomRootParentBtn">Browse...</button>
+        </div>
+
+        <label class="field-label" for="createCustomRootName">New Collection Folder Name</label>
+        <div class="input-row">
+            <input type="text" id="createCustomRootName" placeholder="e.g. Movies - Marvel MCU" required>
+        </div>
+
+        <div id="createCustomRootPreview" class="naming-box" style="margin-bottom:12px;"></div>
+        <output id="createCustomRootFeedback" class="status-output" style="display:block; margin-bottom:10px;" aria-live="polite"></output>
+
+        <div style="display:flex; justify-content:flex-end; gap:10px; padding-top:12px; border-top:1px solid var(--border);">
+            <button type="button" class="btn-secondary" data-close-dialog="createCustomRootModal">Cancel</button>
+            <button type="submit" class="btn-green" id="confirmCreateCustomRootBtn">Create &amp; Register Root Folder</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- 7. QUARANTINED FILES VIEW & PURGE DIALOG -->
+<dialog id="quarantineModal" class="app-dialog" aria-labelledby="quarantineModalTitle">
+    <div class="modal-header">
+        <h3 id="quarantineModalTitle">Quarantined Files — Review &amp; Purge</h3>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <button type="button" class="btn-secondary btn-sm" id="refreshQuarantineBtn">Refresh</button>
+            <button type="button" class="btn-danger" id="purgeAllQuarantineBtn" style="padding:6px 12px;" disabled>Purge All Quarantined Files</button>
+            <button type="button" class="btn-secondary btn-sm" data-close-dialog="quarantineModal">Close</button>
+        </div>
+    </div>
+    <p style="font-size:12px; color:var(--muted); margin:0 0 10px 0;">
+        Files inside <code>_RadarrCompanion_Quarantine</code> folders are strictly excluded from duplicate comparison scans.
+        Purging permanently deletes files from disk to reclaim space.
+    </p>
+    <output id="quarantineStatus" class="status-output" style="display:block; margin-bottom:12px;" aria-live="polite"></output>
+    <ul id="quarantineList" class="folder-list" style="max-height:420px;"></ul>
+</dialog>
+
+<!-- 8. MISSING / DELETED FOLDERS ON ONLINE DRIVES PROMPT DIALOG -->
+<dialog id="missingFoldersModal" class="app-dialog" aria-labelledby="missingFoldersTitle">
+    <div class="modal-header">
+        <h3 id="missingFoldersTitle" style="color:var(--accent);">Deleted / Missing Folders Detected on Online Drive(s)</h3>
+        <button type="button" class="btn-secondary btn-sm" data-close-dialog="missingFoldersModal">Close</button>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin:0 0 12px 0;">
+        The following configured folder(s) do not exist even though their drive is online (they may have been deleted or renamed).
+        Choose whether to <strong>Recreate</strong> each folder or <strong>Ignore</strong> it (saved in <code>config.json</code>).
+    </p>
+    <output id="missingFoldersStatus" class="status-output" style="display:block; margin-bottom:10px;" aria-live="polite"></output>
+    <ul id="missingFoldersList" class="folder-list" style="max-height:360px;"></ul>
+</dialog>
+
+<!-- 9. JOB QUEUE & ACTIVITY HISTORY DIALOG -->
+<dialog id="jobQueueModal" class="app-dialog" aria-labelledby="jobQueueTitle">
+    <div class="modal-header">
+        <h3 id="jobQueueTitle">Job Queue &amp; Recent Activities</h3>
+        <div style="display:flex; gap:8px; align-items:center;">
+            <button type="button" class="btn-secondary btn-sm" id="refreshJobQueueBtn">Refresh</button>
+            <button type="button" class="btn-secondary btn-sm" id="clearJobHistoryBtn">Clear Completed</button>
+            <button type="button" class="btn-secondary btn-sm" data-close-dialog="jobQueueModal">Close</button>
+        </div>
+    </div>
+    <output id="jobQueueStatus" class="status-output" style="display:block; margin-bottom:10px;" aria-live="polite"></output>
+    <ul id="jobQueueList" class="folder-list" style="max-height:440px;"></ul>
+</dialog>
+
+<!-- 10. ABOUT / PRIVACY DIALOG -->
+<dialog id="aboutModal" class="app-dialog modal-sm" aria-labelledby="aboutModalTitle">
+    <div class="modal-header">
+        <h3 id="aboutModalTitle">About &amp; Privacy</h3>
+        <button type="button" class="btn-secondary btn-sm" data-close-dialog="aboutModal">Close</button>
+    </div>
+    <p style="font-size:14px;">
+        <strong>Privacy &amp; Exposure Minimisation:</strong> This application runs 100% locally on your machine
+        (<code>127.0.0.1:8085</code>) with zero external CDNs, zero background tracking, and zero external data uploads.
+        Your Radarr API key is encrypted at rest using Windows DPAPI in <code>config.json</code> and transmitted solely to your local Radarr instance.
+    </p>
+    <p style="font-size:14px;">
+        <strong>AI Assistance Notice:</strong> This application was written and developed with the assistance of
+        Artificial Intelligence (Google Gemini).
+    </p>
+    <p style="font-size:14px;">
+        <strong>Support:</strong> If you find this tool helpful, you can support the author via
+        <a href="https://ko-fi.com/mrdiealotza" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">Donate</a>.
+    </p>
+</dialog>
+
+<script>
+    "use strict";
+
+    let appConfig = {
+        library_folders: [],
+        download_folders: [],
+        staging_folder: "",
+        radarr_url: "http://127.0.0.1:7878",
+        quarantine_mode: "recycle_bin",
+        auto_rename_promoted: true,
+        log_retention_days: 30
+    };
+    let lastScanGroups = [];
+    let groupStates = []; // "pending" | "skipped" | "done" | "failed"
+    let bulkRunning = false;
+    let lastIntakeItems = [];
+    let intakeStates = []; // "pending" | "skipped" | "done" | "failed"
+    let bulkIntakeRunning = false;
+    let maintPollTimer = null;
+    let collectionsOverview = null;
+    let selectedCustomTmdbs = new Set();
+    let selectedCustomTags = new Set();
+    let pendingBulkDelete = null;
+    let pendingCreateRootMove = null;
+    let filterMisplacedOnly = false;
+    let jobPollTimer = null;
+    let collectionRootNotes = {};
+    let lastMissingOnlineFolders = [];
+    let promptedMissingOnce = false;
+    let actionQueue = []; // [{ id, label, button, run }]
+    let actionQueueRunning = false;
+    let actionQueueSeq = 0;
+    let activeServerInstanceId = null;
+    let sessionHeartbeatTimer = null;
+
+    function enqueueAction(label, buttonEl, runFn) {
+        actionQueueSeq += 1;
+        const item = { id: actionQueueSeq, label, button: buttonEl, run: runFn };
+        if (buttonEl) {
+            buttonEl.disabled = true;
+            buttonEl.innerText = "Queued";
+        }
+        actionQueue.push(item);
+        updateQueueBadgesFromClient();
+        processActionQueue();
+    }
+
+    function updateQueueBadgesFromClient() {
+        const statusBadge = document.getElementById("jobStatusBadge");
+        const qBadge = document.getElementById("jobQueueCountBadge");
+        const pendingCount = actionQueue.length;
+        if (statusBadge && pendingCount > 0 && !actionQueueRunning) {
+            statusBadge.className = "badge-btn badge-warn";
+            statusBadge.innerText = `Queued: ${pendingCount} action(s)`;
+        }
+        if (qBadge && pendingCount > 0) {
+            qBadge.innerText = `${pendingCount} queued`;
+        }
+        renderJobQueueList(lastJobHistoryCache);
+    }
+
+    async function processActionQueue() {
+        if (actionQueueRunning) return;
+        actionQueueRunning = true;
+        startJobStatusPolling();
+
+        while (actionQueue.length > 0) {
+            const next = actionQueue.shift();
+            updateQueueBadgesFromClient();
+            try {
+                await next.run();
+            } catch (err) {
+                console.error("Queued action error:", err);
+            }
+            await fetchJobStatusNow();
+        }
+
+        actionQueueRunning = false;
+        stopJobStatusPolling();
+        await fetchJobStatusNow();
+    }
+    let lastJobHistoryCache = [];
+
+    function sortPathsByDriveAndPath(paths) {
+        return [...paths].sort((a, b) => {
+            const da = (String(a).match(/^[A-Za-z]:/) || [String(a).slice(0, 2)])[0].toLowerCase();
+            const db = (String(b).match(/^[A-Za-z]:/) || [String(b).slice(0, 2)])[0].toLowerCase();
+            if (da !== db) return da.localeCompare(db);
+            return String(a).toLowerCase().localeCompare(String(b).toLowerCase());
+        });
+    }
+
+    function renderJobProgressUI(state) {
+        const banner = document.getElementById("jobProgressBanner");
+        const titleEl = document.getElementById("jobTitleLabel");
+        const statusEl = document.getElementById("jobStatusText");
+        const overallPctEl = document.getElementById("jobOverallPctLabel");
+        const overallBar = document.getElementById("jobOverallBar");
+        const fileWrap = document.getElementById("fileProgressWrap");
+        const fileLabel = document.getElementById("fileTransferLabel");
+        const filePctEl = document.getElementById("fileTransferPctLabel");
+        const fileBar = document.getElementById("fileTransferBar");
+        if (!banner) return;
+
+        const active = Boolean(state.active);
+        banner.classList.toggle("is-active", active);
+        titleEl.innerText = state.job_name ? `${state.job_name}:` : "Current Status:";
+        statusEl.innerText = state.status || "Idle — ready.";
+
+        const overallPct = Math.max(0, Math.min(100, parseInt(state.overall_percent || 0, 10)));
+        const countSuffix = state.overall_total > 0 ? ` (${state.overall_current || 0}/${state.overall_total})` : "";
+        overallPctEl.innerText = `${overallPct}%${countSuffix}`;
+        overallBar.value = overallPct;
+
+        if (active && state.current_file) {
+            fileWrap.style.display = "block";
+            const fpct = Math.max(0, Math.min(100, parseInt(state.file_percent || 0, 10)));
+            const mbTxt = state.file_total_mb > 0 ? ` (${state.file_copied_mb}/${state.file_total_mb} MB)` : "";
+            fileLabel.innerText = `File: ${state.current_file}${mbTxt}`;
+            filePctEl.innerText = `${fpct}%`;
+            fileBar.value = fpct;
+        } else {
+            fileWrap.style.display = "none";
+        }
+
+        // Update top status bar live Activity pill
+        const statusBadge = document.getElementById("jobStatusBadge");
+        if (statusBadge) {
+            if (active) {
+                statusBadge.className = "badge-btn badge-warn";
+                statusBadge.innerText = `Running: ${state.job_name || "Job"} (${overallPct}%)`;
+            } else if (state.job_name) {
+                statusBadge.className = "badge-btn badge-online";
+                statusBadge.innerText = `Last: ${state.job_name}`;
+            } else {
+                statusBadge.className = "badge-btn badge-drive";
+                statusBadge.innerText = "Activity: Idle";
+            }
+        }
+
+        // Update Job Queue sidebar count & dialog list if history is present
+        if (Array.isArray(state.history)) {
+            lastJobHistoryCache = state.history;
+            const qBadge = document.getElementById("jobQueueCountBadge");
+            if (qBadge) {
+                const runningCount = state.history.filter(j => j.state === "running").length;
+                const queuedCount = actionQueue.length;
+                if (runningCount > 0 && queuedCount > 0) {
+                    qBadge.innerText = `${runningCount} active + ${queuedCount} queued`;
+                } else if (runningCount > 0) {
+                    qBadge.innerText = `${runningCount} active`;
+                } else if (queuedCount > 0) {
+                    qBadge.innerText = `${queuedCount} queued`;
+                } else {
+                    qBadge.innerText = state.history.length;
+                }
+            }
+            renderJobQueueList(state.history);
+        }
+    }
+
+    function renderJobQueueList(history) {
+        const ul = document.getElementById("jobQueueList");
+        const qStatus = document.getElementById("jobQueueStatus");
+        if (!ul) return;
+        const items = history || [];
+        const running = items.filter(j => j.state === "running").length;
+        const queuedCount = actionQueue.length;
+        if (qStatus) {
+            if (running > 0 || queuedCount > 0) {
+                qStatus.innerText = `${running} running | ${queuedCount} queued | ${items.length} total recorded.`;
+            } else {
+                qStatus.innerText = `${items.length} recent job(s) recorded (all idle).`;
+            }
+        }
+        if (items.length === 0 && queuedCount === 0) {
+            ul.innerHTML = `<li style="color:var(--muted); font-size:13px;">No activities recorded in this session yet.</li>`;
+            return;
+        }
+        const queuedHtml = actionQueue.map((q, idx) => `
+            <li class="folder-item" style="flex-direction:column; align-items:stretch; gap:4px; border-left:3px solid var(--accent);">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                    <div>
+                        <span class="badge badge-warn">QUEUED #${idx + 1}</span>
+                        <strong style="margin-left:6px;">${escapeHtml(q.label)}</strong>
+                    </div>
+                    <span style="font-size:11px; color:var(--muted);">Waiting for current job to finish...</span>
+                </div>
+            </li>
+        `).join("");
+        const historyHtml = items.map(j => {
+            const cls = j.state === "running"
+                ? "badge-warn"
+                : (j.state === "completed" ? "badge-online" : (j.state === "failed" ? "badge-offline" : "badge-warn"));
+            const pctTxt = j.state === "running" ? ` (${j.percent || 0}%)` : "";
+            return `
+                <li class="folder-item" style="flex-direction:column; align-items:stretch; gap:4px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+                        <div>
+                            <span class="badge ${cls}">${escapeHtml(j.state)}${pctTxt}</span>
+                            <strong style="margin-left:6px;">${escapeHtml(j.name)}</strong>
+                        </div>
+                        <span style="font-size:11px; color:var(--muted); font-family:Consolas, monospace;">
+                            ${escapeHtml(j.started_at)}${j.finished_at ? ` &rarr; ${escapeHtml(j.finished_at)}` : ""}
+                        </span>
+                    </div>
+                    <div style="font-size:12px; color:var(--muted);">${escapeHtml(j.detail || "")}</div>
+                    ${j.state === "running" ? `<progress class="job-progress" style="margin-bottom:0;" value="${j.percent || 0}" max="100"></progress>` : ""}
+                </li>
+            `;
+        }).join("");
+        ul.innerHTML = queuedHtml + historyHtml;
+    }
+
+    async function fetchJobStatusNow() {
+        try {
+            const res = await fetch("/api/job_status", { cache: "no-store" });
+            const st = await res.json();
+            if (st.server_instance_id) {
+                if (activeServerInstanceId && activeServerInstanceId !== st.server_instance_id) {
+                    window.location.reload();
+                    return;
+                }
+                activeServerInstanceId = st.server_instance_id;
+            }
+            renderJobProgressUI(st);
+        } catch (_) {}
+    }
+
+    function startSessionHeartbeat() {
+        if (sessionHeartbeatTimer) return;
+        sessionHeartbeatTimer = setInterval(fetchJobStatusNow, 4000);
+    }
+
+    function openJobQueueModal() {
+        openDialog("jobQueueModal");
+        fetchJobStatusNow();
+    }
+
+    async function clearCompletedJobs() {
+        await fetch("/api/jobs/clear", { method: "POST" });
+        await fetchJobStatusNow();
+    }
+
+    function startJobStatusPolling() {
+        if (jobPollTimer) return;
+        jobPollTimer = setInterval(async () => {
+            try {
+                const res = await fetch("/api/job_status");
+                const st = await res.json();
+                renderJobProgressUI(st);
+            } catch (_) {}
+        }, 600);
+    }
+
+    function stopJobStatusPolling() {
+        if (jobPollTimer) {
+            clearInterval(jobPollTimer);
+            jobPollTimer = null;
+        }
+    }
+
+    function renderOfflineStatusAndDrivePies(statusData, allowAutoPrompt = false) {
+        const offBadge = document.getElementById("offlineDrivesBadge");
+        const offlineList = (statusData && statusData.offline_folders) ? statusData.offline_folders : [];
+        if (offBadge) {
+            if (offlineList.length > 0) {
+                const uniqueDrives = [...new Set(offlineList.map(o => o.drive))];
+                offBadge.style.display = "inline-block";
+                offBadge.innerText = `Offline Drive(s): ${uniqueDrives.join(", ")} (${offlineList.length} folder(s))`;
+                offBadge.title = offlineList.map(o => o.path).join("\n");
+            } else {
+                offBadge.style.display = "none";
+            }
+        }
+
+        const missingList = (statusData && statusData.missing_on_online_drive) ? statusData.missing_on_online_drive : [];
+        lastMissingOnlineFolders = missingList;
+        const missBadge = document.getElementById("missingFoldersBadge");
+        if (missBadge) {
+            if (missingList.length > 0) {
+                missBadge.style.display = "inline-block";
+                missBadge.innerText = `Missing Folder(s): ${missingList.length} (Click to Resolve)`;
+            } else {
+                missBadge.style.display = "none";
+            }
+        }
+        renderMissingFoldersModalList();
+        if (allowAutoPrompt && missingList.length > 0 && !promptedMissingOnce) {
+            promptedMissingOnce = true;
+            openDialog("missingFoldersModal");
+        }
+
+        const dock = document.getElementById("drivePiesDock");
+        const grid = document.getElementById("drivePiesGrid");
+        const drives = (statusData && statusData.drives) ? statusData.drives : [];
+        if (!dock || !grid) return;
+
+        if (drives.length === 0) {
+            dock.style.display = "none";
+            return;
+        }
+
+        dock.style.display = "block";
+        const r = 22;
+        const circ = 2 * Math.PI * r;
+        grid.innerHTML = drives.map(d => {
+            if (!d.online || !d.total_gb) {
+                return `
+                    <div class="drive-pie-card offline" title="${escapeHtml(d.drive)} is offline">
+                        <svg class="drive-pie-svg" viewBox="0 0 58 58" aria-hidden="true">
+                            <circle cx="29" cy="29" r="${r}" fill="none" stroke="#3a3a3a" stroke-width="8"></circle>
+                            <text x="29" y="33" text-anchor="middle" fill="#f05050" font-size="10" font-weight="700">OFF</text>
+                        </svg>
+                        <div class="drive-pie-label">${escapeHtml(d.drive)}</div>
+                        <div class="drive-pie-sub" style="color:var(--red);">Offline</div>
+                    </div>
+                `;
+            }
+            const usedPct = Math.max(0, Math.min(100, d.used_pct || 0));
+            const usedDash = ((usedPct / 100) * circ).toFixed(1);
+            const ringColor = usedPct >= 90 ? "#f05050" : (usedPct >= 75 ? "#ffc230" : "#5d9cec");
+            const freeLabel = d.free_gb >= 1000 ? `${(d.free_gb / 1024).toFixed(1)} TB` : `${Math.round(d.free_gb)} GB`;
+            const totalLabel = d.total_gb >= 1000 ? `${(d.total_gb / 1024).toFixed(1)} TB` : `${Math.round(d.total_gb)} GB`;
+            return `
+                <div class="drive-pie-card" title="${escapeHtml(d.drive)} — Used: ${d.used_gb} GB / ${d.total_gb} GB (${usedPct}%) | Free: ${d.free_gb} GB">
+                    <svg class="drive-pie-svg" viewBox="0 0 58 58" aria-label="${escapeHtml(d.drive)} ${usedPct}% used">
+                        <circle cx="29" cy="29" r="${r}" fill="none" stroke="#27c24c" stroke-opacity="0.35" stroke-width="8"></circle>
+                        <circle cx="29" cy="29" r="${r}" fill="none" stroke="${ringColor}" stroke-width="8"
+                            stroke-dasharray="${usedDash} ${circ.toFixed(1)}" transform="rotate(-90 29 29)"></circle>
+                        <text x="29" y="33" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="700">${Math.round(usedPct)}%</text>
+                    </svg>
+                    <div class="drive-pie-label">${escapeHtml(d.drive)}</div>
+                    <div class="drive-pie-sub">${freeLabel} free / ${totalLabel}</div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function openDialog(id) {
+        const dlg = document.getElementById(id);
+        if (dlg && !dlg.open) dlg.showModal();
+    }
+
+    function closeDialog(id) {
+        const dlg = document.getElementById(id);
+        if (dlg && dlg.open) dlg.close();
+    }
+
+    function wireDialogBackdropClose() {
+        document.querySelectorAll("dialog.app-dialog").forEach((dlg) => {
+            dlg.addEventListener("click", (e) => {
+                if (e.target === dlg) dlg.close();
+            });
+        });
+        document.querySelectorAll("[data-close-dialog]").forEach((btn) => {
+            btn.addEventListener("click", () => closeDialog(btn.dataset.closeDialog));
+        });
+    }
+
+    function updateStatusStrip(hasKey) {
+        const totalFolders = appConfig.library_folders.length + appConfig.download_folders.length;
+        document.getElementById("folderCountBadge").innerText = totalFolders;
+
+        if (typeof hasKey === "boolean") {
+            const kEl = document.getElementById("radarrKeyBadge");
+            kEl.className = hasKey ? "badge badge-online" : "badge badge-warn";
+            kEl.innerText = hasKey ? "Radarr Key: Encrypted (DPAPI)" : "Radarr Key: Not Set";
+            const clearBtn = document.getElementById("clearApiKeyBtn");
+            if (clearBtn) clearBtn.style.display = hasKey ? "inline-block" : "none";
+        }
+
+        const rEl = document.getElementById("renameBadge");
+        rEl.className = appConfig.auto_rename_promoted ? "badge badge-online" : "badge badge-warn";
+        rEl.innerText = appConfig.auto_rename_promoted ? "Auto-Rename: ON" : "Auto-Rename: OFF";
+
+        document.getElementById("retentionBadge").innerText = `Log Retention: ${appConfig.log_retention_days}d`;
+    }
+
+    async function loadConfig() {
+        const res = await fetch("/api/config", { cache: "no-store" });
+        const data = await res.json();
+        if (data.server_instance_id) {
+            activeServerInstanceId = data.server_instance_id;
+        }
+        appConfig.library_folders = data.library_folders || [];
+        appConfig.download_folders = data.download_folders || [];
+        appConfig.staging_folder = data.staging_folder || "";
+        appConfig.radarr_url = data.radarr_url || "http://127.0.0.1:7878";
+        appConfig.quarantine_mode = data.quarantine_mode || "recycle_bin";
+        appConfig.auto_rename_promoted = data.auto_rename_promoted !== false;
+        appConfig.log_retention_days = data.log_retention_days || 30;
+
+        document.getElementById("radarrUrl").value = appConfig.radarr_url;
+        document.getElementById("radarrApiKey").placeholder = data.has_api_key
+            ? "Encrypted & Saved (leave blank to keep)"
+            : "Enter Radarr API Key";
+        document.getElementById("quarantineMode").value = appConfig.quarantine_mode;
+        document.getElementById("autoRenameToggle").checked = appConfig.auto_rename_promoted;
+        document.getElementById("logRetentionDays").value = appConfig.log_retention_days;
+
+        if (data.cached_naming_format) {
+            document.getElementById("namingFormatDisplay").innerText = data.cached_naming_format;
+        }
+        if (data.log_file_path) {
+            document.getElementById("logPathHint").innerText = `(${data.log_file_path})`;
+        }
+
+        const cap = data.capabilities || {};
+        document.getElementById("capBadge").innerText = cap.pymediainfo
+            ? "MediaInfo Inspection: ON"
+            : "MediaInfo Fallback Mode";
+
+        updateStatusStrip(Boolean(data.has_api_key));
+        renderFolderLists(data.folder_status);
+        renderOfflineStatusAndDrivePies(data.folder_status, true);
+        populateStagingRootSelect();
+        loadMaintenanceStatus(false);
+        loadQuarantineStatus();
+        fetchJobStatusNow();
+        refreshLogs();
+    }
+
+    function populateStagingRootSelect(preferredPath = "") {
+        const sel = document.getElementById("stagingRootSelect");
+        const inputEl = document.getElementById("stagingFolderInput");
+        const libs = sortPathsByDriveAndPath(appConfig.library_folders || []);
+        let chosen = preferredPath || appConfig.staging_folder || "";
+        if (!chosen && libs.length > 0) {
+            chosen = libs[0];
+        }
+
+        const rawOpts = [];
+        const seen = new Set();
+        [...(chosen ? [chosen] : []), ...libs].forEach(f => {
+            if (f && !seen.has(f.toLowerCase())) {
+                rawOpts.push(f);
+                seen.add(f.toLowerCase());
+            }
+        });
+        const options = sortPathsByDriveAndPath(rawOpts);
+
+        if (sel) {
+            if (options.length === 0) {
+                sel.innerHTML = `<option value="">Browse for a staging folder...</option>`;
+            } else {
+                sel.innerHTML = options.map(f => {
+                    const isSel = f.toLowerCase() === chosen.toLowerCase() ? "selected" : "";
+                    return `<option value="${escapeHtml(f)}" ${isSel}>${escapeHtml(f)}</option>`;
+                }).join("");
+            }
+            appConfig.staging_folder = sel.value || chosen;
+        }
+        if (inputEl) {
+            inputEl.value = appConfig.staging_folder || "";
+        }
+    }
+
+    async function browseForStagingFolder(buttonId, statusElemId) {
+        const btn = document.getElementById(buttonId);
+        const statusEl = statusElemId ? document.getElementById(statusElemId) : null;
+        const origLabel = btn ? btn.innerText : "Browse...";
+
+        if (btn) {
+            btn.disabled = true;
+            btn.innerText = "Opening...";
+        }
+        if (statusEl) {
+            statusEl.style.color = "var(--muted)";
+            statusEl.innerText = "Waiting for Windows Explorer dialog...";
+        }
+
+        try {
+            const res = await fetch("/api/browse", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode: "folder" })
+            });
+            const data = await res.json();
+            if (data.ok && data.path) {
+                appConfig.staging_folder = data.path;
+                populateStagingRootSelect(data.path);
+                await saveSettings();
+                renderIntakeQueue();
+                if (statusEl) {
+                    statusEl.style.color = "var(--green)";
+                    statusEl.innerText = `Staging folder set to ${data.path} and saved.`;
+                }
+            } else if (data.ok && data.cancelled) {
+                if (statusEl) statusEl.innerText = "";
+            } else if (statusEl) {
+                statusEl.style.color = "var(--red)";
+                statusEl.innerText = data.message || "Could not open browse dialog.";
+            }
+        } catch (err) {
+            if (statusEl) {
+                statusEl.style.color = "var(--red)";
+                statusEl.innerText = `Browse error: ${err.message}`;
+            }
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerText = origLabel;
+            }
+        }
+    }
+
+    function renderMissingFoldersModalList() {
+        const ul = document.getElementById("missingFoldersList");
+        if (!ul) return;
+        if (!lastMissingOnlineFolders || lastMissingOnlineFolders.length === 0) {
+            ul.innerHTML = `<li style="color:var(--green); font-size:13px;">All online drive folders are present or resolved.</li>`;
+            return;
+        }
+        ul.innerHTML = lastMissingOnlineFolders.map((item, idx) => `
+            <li class="folder-item">
+                <div style="min-width:0; flex:1;">
+                    <span class="badge badge-drive">${escapeHtml(item.drive)}</span>
+                    <span class="badge badge-warn">Deleted / Missing</span>
+                    <span style="margin-left:6px; font-family:Consolas, monospace; word-break:break-all;">${escapeHtml(item.path)}</span>
+                </div>
+                <div style="display:flex; gap:6px; flex-shrink:0;">
+                    <button type="button" class="btn-green btn-sm" data-resolve-missing-idx="${idx}" data-resolve-action="recreate">Recreate</button>
+                    <button type="button" class="btn-secondary btn-sm" data-resolve-missing-idx="${idx}" data-resolve-action="ignore">Ignore</button>
+                </div>
+            </li>
+        `).join("");
+    }
+
+    async function resolveMissingFolderAction(folderPath, action) {
+        const statusEl = document.getElementById("missingFoldersStatus");
+        const libStatusEl = document.getElementById("librarySyncStatus");
+        if (statusEl) {
+            statusEl.style.color = "var(--muted)";
+            statusEl.innerText = action === "recreate" ? `Recreating ${folderPath}...` : `Updating ${folderPath}...`;
+        }
+        try {
+            const res = await fetch("/api/folder/resolve_missing", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path: folderPath, action })
+            });
+            const data = await res.json();
+            if (statusEl) {
+                statusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+                statusEl.innerText = data.message;
+            }
+            if (libStatusEl) {
+                libStatusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+                libStatusEl.innerText = data.message;
+            }
+            if (data.folder_status) {
+                renderFolderLists(data.folder_status);
+                renderOfflineStatusAndDrivePies(data.folder_status, false);
+                if (lastMissingOnlineFolders.length === 0) {
+                    closeDialog("missingFoldersModal");
+                }
+            }
+        } catch (err) {
+            if (statusEl) {
+                statusEl.style.color = "var(--red)";
+                statusEl.innerText = `Error: ${err.message}`;
+            }
+        } finally {
+            refreshLogs();
+        }
+    }
+
+    async function toggleFolderIgnoredState(folderPath, ignoreFlag) {
+        const libStatusEl = document.getElementById("librarySyncStatus");
+        if (libStatusEl) {
+            libStatusEl.style.color = "var(--muted)";
+            libStatusEl.innerText = ignoreFlag ? `Ignoring ${folderPath}...` : `Re-enabling ${folderPath}...`;
+        }
+        try {
+            const res = await fetch("/api/folder/toggle_ignore", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path: folderPath, ignore: ignoreFlag })
+            });
+            const data = await res.json();
+            if (libStatusEl) {
+                libStatusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+                libStatusEl.innerText = data.message;
+            }
+            if (data.folder_status) {
+                renderFolderLists(data.folder_status);
+                renderOfflineStatusAndDrivePies(data.folder_status, false);
+            }
+        } catch (err) {
+            if (libStatusEl) {
+                libStatusEl.style.color = "var(--red)";
+                libStatusEl.innerText = `Error: ${err.message}`;
+            }
+        } finally {
+            refreshLogs();
+        }
+    }
+
+    function renderFolderLists(statusData) {
+        const map = { library_folders: "libraryList", download_folders: "downloadList" };
+        for (const [key, elemId] of Object.entries(map)) {
+            const ul = document.getElementById(elemId);
+            const items = (statusData && statusData[key]) ? statusData[key] : [];
+            if (items.length === 0) {
+                ul.innerHTML = `<li style="color:var(--muted); font-size:13px;">No folders configured yet.</li>`;
+                continue;
+            }
+            ul.innerHTML = items.map((item, idx) => {
+                let stateBadge = `<span class="badge badge-online">Online</span>`;
+                let extraBtns = "";
+                if (!item.online && item.missing_on_online_drive) {
+                    if (item.ignored_missing) {
+                        stateBadge = `<span class="badge badge-warn">Missing (Ignored)</span>`;
+                        extraBtns = `<button type="button" class="btn-secondary btn-sm" data-inline-resolve-path="${escapeHtml(item.path)}" data-inline-resolve-action="restore">Restore</button>`;
+                    } else {
+                        stateBadge = `<span class="badge badge-warn">Missing (Drive Online)</span>`;
+                        extraBtns = `<button type="button" class="btn-green btn-sm" data-inline-resolve-path="${escapeHtml(item.path)}" data-inline-resolve-action="recreate">Recreate</button>
+                                     <button type="button" class="btn-secondary btn-sm" data-inline-resolve-path="${escapeHtml(item.path)}" data-inline-resolve-action="ignore">Ignore</button>`;
+                    }
+                } else if (!item.online) {
+                    stateBadge = `<span class="badge badge-offline">Drive Offline</span>`;
+                }
+                const ignoreToggleBtn = item.ignored
+                    ? `<button type="button" class="badge-btn badge-warn" data-toggle-ignore-path="${escapeHtml(item.path)}" data-toggle-ignore-val="0" title="Click to re-enable this folder for scanning &amp; triage">Ignored &#x21C4; Enable</button>`
+                    : `<button type="button" class="badge-btn badge-online" data-toggle-ignore-path="${escapeHtml(item.path)}" data-toggle-ignore-val="1" title="Click to ignore this folder (e.g. Waiting For / Missing / Unreleased)">Active &#x21C4; Ignore</button>`;
+                return `
+                    <li class="folder-item" style="${item.ignored ? 'opacity:0.65;' : ''}">
+                        <div style="min-width:0; flex:1;">
+                            <span class="badge badge-drive">${escapeHtml(item.drive)}</span>
+                            ${stateBadge}
+                            <span style="margin-left:6px; font-family:Consolas, monospace; word-break:break-all;">${escapeHtml(item.path)}</span>
+                            ${item.free_gb !== null ? `<span style="color:var(--muted); margin-left:6px;">(${item.free_gb} GB free)</span>` : ''}
+                        </div>
+                        <div style="display:flex; gap:6px; align-items:center; flex-shrink:0;">
+                            ${ignoreToggleBtn}
+                            ${extraBtns}
+                            <button type="button" class="btn-danger" data-remove-list="${key}" data-remove-index="${idx}">Remove</button>
+                        </div>
+                    </li>
+                `;
+            }).join("");
+        }
+    }
+
+    async function browseForPath(mode, inputId, buttonId, statusElemId) {
+        const btn = document.getElementById(buttonId);
+        const statusEl = statusElemId ? document.getElementById(statusElemId) : null;
+        const origLabel = btn ? btn.innerText : "Browse...";
+
+        if (btn) {
+            btn.disabled = true;
+            btn.innerText = "Opening...";
+        }
+        if (statusEl) {
+            statusEl.style.color = "var(--muted)";
+            statusEl.innerText = "Waiting for Windows Explorer dialog...";
+        }
+
+        try {
+            const res = await fetch("/api/browse", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode })
+            });
+            const data = await res.json();
+            if (data.ok && data.path) {
+                document.getElementById(inputId).value = data.path;
+                if (statusEl) {
+                    statusEl.style.color = "var(--green)";
+                    statusEl.innerText = mode === "contig"
+                        ? "Selected contig executable — click Save Maintenance Schedule to apply."
+                        : "Selected intake folder — click Add to save.";
+                }
+            } else if (data.ok && data.cancelled) {
+                if (statusEl) statusEl.innerText = "";
+            } else if (statusEl) {
+                statusEl.style.color = "var(--red)";
+                statusEl.innerText = data.message || "Could not open browse dialog.";
+            }
+        } catch (err) {
+            if (statusEl) {
+                statusEl.style.color = "var(--red)";
+                statusEl.innerText = `Browse error: ${err.message}`;
+            }
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerText = origLabel;
+            }
+        }
+    }
+
+    async function addFolder(listKey, inputId) {
+        const input = document.getElementById(inputId);
+        const val = input.value.trim();
+        if (!val) return;
+        if (!appConfig[listKey].includes(val)) {
+            appConfig[listKey].push(val);
+            input.value = "";
+            await saveSettings();
+        }
+    }
+
+    async function removeFolder(listKey, index) {
+        appConfig[listKey].splice(index, 1);
+        await saveSettings();
+    }
+
+    async function saveSettings() {
+        appConfig.radarr_url = document.getElementById("radarrUrl").value.trim();
+        appConfig.quarantine_mode = document.getElementById("quarantineMode").value;
+        appConfig.auto_rename_promoted = document.getElementById("autoRenameToggle").checked;
+        appConfig.log_retention_days = parseInt(document.getElementById("logRetentionDays").value, 10) || 30;
+        const apiKeyVal = document.getElementById("radarrApiKey").value.trim();
+
+        const res = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...appConfig, radarr_api_key: apiKeyVal })
+        });
+        const data = await res.json();
+        const statusEl = document.getElementById("settingsStatus");
+
+        if (data.ok) {
+            if (apiKeyVal) {
+                document.getElementById("radarrApiKey").value = "";
+                document.getElementById("radarrApiKey").placeholder = "Encrypted & Saved (leave blank to keep)";
+                updateStatusStrip(true);
+            } else if (typeof data.has_api_key === "boolean") {
+                updateStatusStrip(data.has_api_key);
+            } else {
+                updateStatusStrip();
+            }
+            if (data.log_retention_days) {
+                appConfig.log_retention_days = data.log_retention_days;
+                document.getElementById("logRetentionDays").value = data.log_retention_days;
+            }
+            renderFolderLists(data.folder_status);
+            renderOfflineStatusAndDrivePies(data.folder_status);
+            populateStagingRootSelect();
+            statusEl.style.color = "var(--green)";
+            statusEl.innerText = "Settings saved and encrypted via Windows DPAPI.";
+        } else {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = data.message || "Failed to save settings.";
+        }
+        refreshLogs();
+    }
+
+    async function clearSavedApiKey() {
+        const statusEl = document.getElementById("settingsStatus");
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = "Clearing saved Radarr API key...";
+
+        const res = await fetch("/api/clear_api_key", { method: "POST" });
+        const data = await res.json();
+        if (data.ok) {
+            const keyInput = document.getElementById("radarrApiKey");
+            keyInput.value = "";
+            keyInput.placeholder = "Enter Radarr API Key";
+            updateStatusStrip(false);
+            statusEl.style.color = "var(--amber)";
+            statusEl.innerText = data.message || "Saved Radarr API key cleared from config.json.";
+        } else {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = data.message || "Failed to clear saved API key.";
+        }
+        refreshLogs();
+    }
+
+    async function testRadarr() {
+        await saveSettings();
+        const statusEl = document.getElementById("settingsStatus");
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = "Testing connection to Radarr...";
+
+        const res = await fetch("/api/test_radarr", { method: "POST" });
+        const data = await res.json();
+        statusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+        statusEl.innerText = data.message;
+
+        if (data.naming_format) {
+            document.getElementById("namingFormatDisplay").innerText = data.naming_format;
+        }
+        refreshLogs();
+    }
+
+    async function syncFromRadarr() {
+        const statusEl = document.getElementById("librarySyncStatus");
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = "Syncing root folders from Radarr...";
+
+        const res = await fetch("/api/sync_root_folders", { method: "POST" });
+        const data = await res.json();
+        if (data.ok) {
+            appConfig.library_folders = data.library_folders || [];
+            renderFolderLists(data.folder_status);
+            renderOfflineStatusAndDrivePies(data.folder_status);
+            populateStagingRootSelect();
+            updateStatusStrip();
+            if (data.naming_format) {
+                document.getElementById("namingFormatDisplay").innerText = data.naming_format;
+            }
+            statusEl.style.color = "var(--green)";
+            statusEl.innerText = `Synced ${data.total_in_radarr} root folder(s) from Radarr (${data.added_count} new folder(s) added).`;
+        } else {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = data.message || "Could not sync root folders from Radarr.";
+        }
+        refreshLogs();
+    }
+
+    async function trimLogsNow() {
+        const res = await fetch("/api/trim_logs", { method: "POST" });
+        await res.json();
+        refreshLogs();
+    }
+
+    async function runScan() {
+        const btn = document.getElementById("scanBtn");
+        const summary = document.getElementById("resultsSummary");
+        const container = document.getElementById("duplicatesContainer");
+        const bulkWrap = document.getElementById("bulkActionWrap");
+
+        btn.disabled = true;
+        btn.innerText = "Scanning & Inspecting Streams...";
+        summary.innerHTML = "Scanning configured folders, matching Radarr TMDB IDs, and inspecting video/audio streams...";
+        container.innerHTML = "";
+        bulkWrap.style.display = "none";
+
+        try {
+            const res = await fetch("/api/scan", { method: "POST" });
+            const report = await res.json();
+            lastScanGroups = report.duplicate_groups || [];
+            groupStates = lastScanGroups.map(() => "pending");
+            lastIntakeItems = report.intake_candidates || [];
+            intakeStates = lastIntakeItems.map(() => "pending");
+
+            if (report.default_staging_folder) {
+                populateStagingRootSelect(report.default_staging_folder);
+            } else {
+                populateStagingRootSelect();
+            }
+
+            if (report.naming_format) {
+                document.getElementById("namingFormatDisplay").innerText = report.naming_format;
+            }
+
+            let summaryHtml = `Scanned <strong>${report.scanned_files}</strong> movie file(s) &bull; Found <strong>${lastScanGroups.length}</strong> duplicate group(s) &bull; <strong>${lastIntakeItems.length}</strong> stranded intake movie(s).`;
+            if (report.radarr_connected) {
+                summaryHtml += ` &bull; <span class="badge badge-online">Radarr TMDB Matched (${report.radarr_movies_indexed} movies)</span>`;
+            } else {
+                summaryHtml += ` &bull; <span class="badge badge-warn">Local Filename Matching</span>`;
+            }
+            if (report.offline_roots && report.offline_roots.length > 0) {
+                summaryHtml += ` &bull; <span class="badge badge-offline">Skipped ${report.offline_roots.length} offline folder(s)</span>`;
+            }
+            summary.innerHTML = summaryHtml;
+
+            renderDuplicates();
+            renderIntakeQueue();
+        } catch (err) {
+            summary.innerHTML = `<span style="color:var(--red);">Scan failed: ${escapeHtml(err.message)}</span>`;
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "Scan All Online Drives";
+            fetchJobStatusNow();
+            refreshLogs();
+        }
+    }
+
+    function isGroupLocked(g) {
+        return g.winner.locked || g.losers.some(l => l.locked);
+    }
+
+    function updateBulkButtonState() {
+        const bulkWrap = document.getElementById("bulkActionWrap");
+        const btn = document.getElementById("approveAllBtn");
+        if (lastScanGroups.length === 0) {
+            bulkWrap.style.display = "none";
+            return;
+        }
+        bulkWrap.style.display = "flex";
+        const actionableCount = lastScanGroups.filter((g, i) => groupStates[i] === "pending" && !isGroupLocked(g)).length;
+        btn.disabled = bulkRunning || actionableCount === 0;
+        btn.innerText = bulkRunning
+            ? "Executing Safe Swaps..."
+            : `Approve All Safe Swaps (${actionableCount})`;
+    }
+
+    function renderDuplicates() {
+        const container = document.getElementById("duplicatesContainer");
+        const searchEl = document.getElementById("globalSearchInput");
+        updateBulkButtonState();
+
+        if (lastScanGroups.length === 0) {
+            container.innerHTML = `<div class="card" style="color:var(--green);">No duplicate movies detected across your online drives.</div>`;
+            return;
+        }
+
+        const q = (searchEl ? searchEl.value : "").trim().toLowerCase();
+
+        const indexedGroups = lastScanGroups
+            .map((g, idx) => ({ g, idx }))
+            .filter(({ g }) => {
+                if (!q) return true;
+                const haystack = [
+                    g.title,
+                    g.winner.path,
+                    g.winner.drive,
+                    g.target_library_folder || "",
+                    ...g.losers.map(l => `${l.path} ${l.drive}`)
+                ].join(" ").toLowerCase();
+                return haystack.includes(q);
+            });
+
+        if (indexedGroups.length === 0) {
+            container.innerHTML = `<div class="card" style="color:var(--muted);">No duplicate movies match "<strong>${escapeHtml(q)}</strong>".</div>`;
+            return;
+        }
+
+        container.innerHTML = indexedGroups.map(({ g, idx }) => {
+            const w = g.winner;
+            const anyLocked = isGroupLocked(g);
+
+            let actionExplain = "";
+            if (g.action_type === "UPGRADE_ESTABLISHED_FOLDER") {
+                actionExplain = `Promote download copy (${escapeHtml(w.drive)}) into Radarr folder <code>${escapeHtml(g.target_library_folder)}</code> ${g.cross_drive_transfer ? '<span class="badge badge-warn">Cross-Drive Verified Copy</span>' : '<span class="badge badge-online">Same-Drive Instant Move</span>'} and quarantine inferior copy.`;
+            } else if (g.action_type === "RELOCATE_TO_RADARR_FOLDER") {
+                actionExplain = `Relocate winning copy from <code>${escapeHtml(w.folder)}</code> into Radarr DB folder <code>${escapeHtml(g.target_library_folder)}</code> ${g.cross_drive_transfer ? '<span class="badge badge-warn">Cross-Drive Verified Copy</span>' : '<span class="badge badge-online">Same-Drive Instant Move</span>'} and quarantine ${g.losers.length} inferior duplicate(s).`;
+            } else if (g.action_type === "KEEP_EXISTING_LIBRARY") {
+                actionExplain = `Keep best copy already in established folder <code>${escapeHtml(w.folder)}</code> and quarantine ${g.losers.length} inferior duplicate(s).`;
+            } else {
+                actionExplain = `Keep highest quality copy on ${escapeHtml(w.drive)} and quarantine ${g.losers.length} inferior duplicate(s).`;
+            }
+
+            let renameHtml = "";
+            if (g.proposed_filename) {
+                const changed = g.proposed_filename !== w.filename;
+                renameHtml = `
+                    <div class="rename-preview">
+                        <strong>Feature 2 Auto-Rename Preview:</strong>
+                        ${changed
+                            ? `Will rename promoted file to <code>${escapeHtml(g.proposed_filename)}</code>`
+                            : `Already matches Radarr convention (<code>${escapeHtml(g.proposed_filename)}</code>)`}
+                    </div>
+                `;
+            }
+
+            const losersHtml = g.losers.map(l => `
+                <div class="file-row loser">
+                    <div>
+                        <span class="badge badge-offline">QUARANTINE</span>
+                        <span class="badge badge-drive">${escapeHtml(l.drive)}</span>
+                        ${l.locked ? '<span class="badge badge-warn">LOCKED</span>' : ''}
+                    </div>
+                    <div>
+                        <div class="file-path">[${escapeHtml(l.role.toUpperCase())}] ${escapeHtml(l.path)}</div>
+                        <div class="file-specs">${escapeHtml(l.summary)} <span style="color:var(--muted);">(${escapeHtml(l.method)})</span></div>
+                    </div>
+                    <div class="score-pill" style="color:var(--red);">Score ${l.score}</div>
+                </div>
+            `).join("");
+
+            return `
+                <article class="dup-card" id="dup-card-${idx}">
+                    <div class="dup-header">
+                        <h3 class="dup-title">${escapeHtml(g.title)}</h3>
+                        <div>
+                            <span class="badge ${g.tmdb_matched ? 'badge-online' : 'badge-drive'}">${escapeHtml(w.match_source)}</span>
+                            <span class="badge badge-drive">${1 + g.losers.length} Copies</span>
+                        </div>
+                    </div>
+
+                    <div class="file-row winner">
+                        <div>
+                            <span class="badge badge-online">KEEP (BEST)</span>
+                            <span class="badge badge-drive">${escapeHtml(w.drive)}</span>
+                            ${w.locked ? '<span class="badge badge-warn">LOCKED</span>' : ''}
+                        </div>
+                        <div>
+                            <div class="file-path">[${escapeHtml(w.role.toUpperCase())}] ${escapeHtml(w.path)}</div>
+                            <div class="file-specs">${escapeHtml(w.summary)} <span style="color:var(--muted);">(${escapeHtml(w.method)})</span></div>
+                        </div>
+                        <div class="score-pill" style="color:var(--green);">Score ${w.score}</div>
+                    </div>
+
+                    ${losersHtml}
+                    ${renameHtml}
+
+                    <div class="action-bar">
+                        <div id="status-msg-${idx}" style="color:var(--muted);">${actionExplain}</div>
+                        <div style="display:flex; gap:8px;">
+                            <button type="button" class="btn-secondary btn-sm" id="skip-btn-${idx}" data-skip-group="${idx}">Skip</button>
+                            <button type="button" class="btn-green" id="exec-btn-${idx}" data-exec-group="${idx}" ${anyLocked ? 'disabled title="One or more files are locked by another process"' : ''}>
+                                ${anyLocked ? 'File Locked' : 'Approve Safe Swap & Quarantine'}
+                            </button>
+                        </div>
+                    </div>
+                </article>
+            `;
+        }).join("");
+    }
+
+    function skipGroup(index) {
+        groupStates[index] = "skipped";
+        const card = document.getElementById(`dup-card-${index}`);
+        if (card) card.style.opacity = "0.45";
+        const execBtn = document.getElementById(`exec-btn-${index}`);
+        const skipBtn = document.getElementById(`skip-btn-${index}`);
+        const msg = document.getElementById(`status-msg-${index}`);
+        if (execBtn) execBtn.disabled = true;
+        if (skipBtn) skipBtn.disabled = true;
+        if (msg) msg.innerHTML = `<span style="color:var(--amber);">Skipped by user.</span>`;
+        updateBulkButtonState();
+    }
+
+    async function executeGroup(index) {
+        const g = lastScanGroups[index];
+        const btn = document.getElementById(`exec-btn-${index}`);
+        const skipBtn = document.getElementById(`skip-btn-${index}`);
+        const msg = document.getElementById(`status-msg-${index}`);
+        const card = document.getElementById(`dup-card-${index}`);
+
+        if (btn) {
+            btn.disabled = true;
+            btn.innerText = "Processing...";
+        }
+        if (skipBtn) skipBtn.disabled = true;
+        if (msg) {
+            msg.style.color = "var(--accent)";
+            msg.innerText = g.cross_drive_transfer
+                ? "Copying across drives with size verification..."
+                : "Moving & quarantining inferior copy...";
+        }
+
+        const payload = {
+            title: g.title,
+            radarr_movie_id: g.radarr_movie_id,
+            winner_path: g.winner.path,
+            loser_paths: g.losers.map(l => l.path),
+            target_library_folder: g.target_library_folder,
+            proposed_filename: g.proposed_filename
+        };
+
+        try {
+            startJobStatusPolling();
+            const res = await fetch("/api/execute", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (data.ok) {
+                groupStates[index] = "done";
+                if (msg) {
+                    msg.style.color = "var(--green)";
+                    msg.innerText = data.message;
+                }
+                if (btn) btn.innerText = "Completed";
+                if (card) card.style.borderColor = "var(--green)";
+            } else {
+                groupStates[index] = "failed";
+                if (msg) {
+                    msg.style.color = "var(--red)";
+                    msg.innerText = data.message;
+                }
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerText = "Retry Safe Swap";
+                }
+                if (skipBtn) skipBtn.disabled = false;
+            }
+        } catch (err) {
+            groupStates[index] = "failed";
+            if (msg) {
+                msg.style.color = "var(--red)";
+                msg.innerText = `Error: ${err.message}`;
+            }
+            if (btn) {
+                btn.disabled = false;
+                btn.innerText = "Retry Safe Swap";
+            }
+            if (skipBtn) skipBtn.disabled = false;
+        } finally {
+            if (!bulkRunning) stopJobStatusPolling();
+            updateBulkButtonState();
+            refreshLogs();
+        }
+    }
+
+    async function approveAllSafe() {
+        const todo = lastScanGroups
+            .map((g, i) => ({ g, i }))
+            .filter(({ g, i }) => groupStates[i] === "pending" && !isGroupLocked(g));
+        if (todo.length === 0) return;
+
+        todo.forEach(({ g, i }) => {
+            groupStates[i] = "queued";
+            const btn = document.getElementById(`exec-btn-${i}`);
+            const skipBtn = document.getElementById(`skip-btn-${i}`);
+            const msg = document.getElementById(`status-msg-${i}`);
+            if (skipBtn) skipBtn.disabled = true;
+            if (msg) {
+                msg.style.color = "var(--accent)";
+                msg.innerText = "Queued for safe swap...";
+            }
+            enqueueAction(`Duplicate Swap: ${g.title}`, btn, () => executeGroup(i));
+        });
+        updateBulkButtonState();
+    }
+
+    // --- FEATURE 3: STRANDED INTAKE TRIAGE (SWEEP TO STAGING ROOT) ---
+    function updateBulkIntakeButtonState() {
+        const btn = document.getElementById("approveAllIntakeBtn");
+        if (!btn) return;
+        const stagingVal = document.getElementById("stagingRootSelect").value;
+        const actionable = lastIntakeItems.filter((item, i) => intakeStates[i] === "pending" && !item.source.locked).length;
+        btn.disabled = bulkIntakeRunning || actionable === 0 || (!stagingVal && lastIntakeItems.every(it => it.dest_source !== "Radarr DB Folder"));
+        btn.innerText = bulkIntakeRunning
+            ? "Importing Movies..."
+            : `Approve All Safe Imports (${actionable})`;
+    }
+
+    function renderIntakeQueue() {
+        const section = document.getElementById("intakeSection");
+        const container = document.getElementById("intakeContainer");
+        const countBadge = document.getElementById("intakeCountBadge");
+        const searchEl = document.getElementById("globalSearchInput");
+
+        if (lastIntakeItems.length === 0) {
+            section.style.display = "none";
+            container.innerHTML = "";
+            return;
+        }
+
+        section.style.display = "block";
+        if (searchEl) searchEl.style.display = "inline-block";
+        countBadge.innerText = lastIntakeItems.length;
+        updateBulkIntakeButtonState();
+
+        const stagingRoot = document.getElementById("stagingRootSelect").value || "";
+        const q = (searchEl ? searchEl.value : "").trim().toLowerCase();
+
+        const indexed = lastIntakeItems
+            .map((item, idx) => ({ item, idx }))
+            .filter(({ item }) => {
+                if (!q) return true;
+                const hay = `${item.title} ${item.source.path} ${item.source.drive} ${item.folder_name} ${stagingRoot}`.toLowerCase();
+                return hay.includes(q);
+            });
+
+        if (indexed.length === 0) {
+            container.innerHTML = `<div class="card" style="color:var(--muted);">No stranded intake movies match "<strong>${escapeHtml(q)}</strong>".</div>`;
+            return;
+        }
+
+        container.innerHTML = indexed.map(({ item, idx }) => {
+            const s = item.source;
+            const destFolder = item.dest_source === "Radarr DB Folder"
+                ? item.target_folder
+                : (stagingRoot ? `${stagingRoot}\\${item.folder_name}` : item.folder_name);
+            const isCross = destFolder && s.drive && !destFolder.toUpperCase().startsWith(s.drive.toUpperCase());
+            const subBadge = item.subtitle_count > 0
+                ? `<span class="badge badge-online">+${item.subtitle_count} Subtitle(s)</span>`
+                : "";
+            const state = intakeStates[idx];
+            const lockedOrDone = s.locked || state === "done" || state === "skipped";
+
+            return `
+                <article class="dup-card" id="intake-card-${idx}" style="${state === 'skipped' ? 'opacity:0.45;' : (state === 'done' ? 'border-color:var(--green);' : '')}">
+                    <div class="dup-header">
+                        <h3 class="dup-title">${escapeHtml(item.title)}</h3>
+                        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                            <span class="badge ${item.tmdb_matched ? 'badge-online' : 'badge-drive'}">${escapeHtml(s.match_source)}</span>
+                            <span class="badge badge-warn">Stranded in Intake</span>
+                            ${subBadge}
+                        </div>
+                    </div>
+
+                    <div class="file-row winner">
+                        <div>
+                            <span class="badge badge-drive">${escapeHtml(s.drive)}</span>
+                            ${s.locked ? '<span class="badge badge-warn">LOCKED</span>' : '<span class="badge badge-online">READY</span>'}
+                        </div>
+                        <div>
+                            <div class="file-path">[INTAKE] ${escapeHtml(s.path)}</div>
+                            <div class="file-specs">${escapeHtml(s.summary)} <span style="color:var(--muted);">(${escapeHtml(s.method)})</span></div>
+                        </div>
+                        <div class="score-pill" style="color:var(--accent);">Score ${s.score}</div>
+                    </div>
+
+                    <div class="rename-preview">
+                        <strong>Destination (${escapeHtml(item.dest_source)}):</strong>
+                        <code>${escapeHtml(destFolder)}\\${escapeHtml(item.proposed_filename)}</code>
+                        ${isCross ? ' <span class="badge badge-warn">Cross-Drive Verified Copy</span>' : ' <span class="badge badge-online">Same-Drive Instant Move</span>'}
+                    </div>
+
+                    <div class="action-bar">
+                        <div id="intake-status-${idx}" style="color:var(--muted);">
+                            ${state === "done" ? '<span style="color:var(--green);">Imported successfully.</span>' : (state === "skipped" ? '<span style="color:var(--amber);">Skipped by user.</span>' : 'Moves video + matching subtitles, quarantines torrent clutter &amp; triggers Radarr rescan.')}
+                        </div>
+                        <div style="display:flex; gap:8px;">
+                            <button type="button" class="btn-secondary btn-sm" id="intake-skip-${idx}" data-skip-intake="${idx}" ${lockedOrDone ? "disabled" : ""}>Skip</button>
+                            <button type="button" class="btn-green" id="intake-exec-${idx}" data-exec-intake="${idx}" ${lockedOrDone ? "disabled" : ""}>
+                                ${s.locked ? "File Locked" : (state === "done" ? "Imported" : "Import to Staging")}
+                            </button>
+                        </div>
+                    </div>
+                </article>
+            `;
+        }).join("");
+    }
+
+    function skipIntakeItem(index) {
+        intakeStates[index] = "skipped";
+        const card = document.getElementById(`intake-card-${index}`);
+        if (card) card.style.opacity = "0.45";
+        const execBtn = document.getElementById(`intake-exec-${index}`);
+        const skipBtn = document.getElementById(`intake-skip-${index}`);
+        const msg = document.getElementById(`intake-status-${index}`);
+        if (execBtn) execBtn.disabled = true;
+        if (skipBtn) skipBtn.disabled = true;
+        if (msg) msg.innerHTML = `<span style="color:var(--amber);">Skipped by user.</span>`;
+        updateBulkIntakeButtonState();
+    }
+
+    async function executeIntakeImport(index) {
+        const item = lastIntakeItems[index];
+        const btn = document.getElementById(`intake-exec-${index}`);
+        const skipBtn = document.getElementById(`intake-skip-${index}`);
+        const msg = document.getElementById(`intake-status-${index}`);
+        const card = document.getElementById(`intake-card-${index}`);
+        const stagingRoot = document.getElementById("stagingRootSelect").value || "";
+
+        if (btn) {
+            btn.disabled = true;
+            btn.innerText = "Importing...";
+        }
+        if (skipBtn) skipBtn.disabled = true;
+        if (msg) {
+            msg.style.color = "var(--accent)";
+            msg.innerText = "Moving movie + subtitles and cleaning intake clutter...";
+        }
+
+        const payload = {
+            title: item.title,
+            movie_meta: item.movie_meta || {},
+            radarr_movie_id: item.radarr_movie_id,
+            source_path: item.source.path,
+            dest_source: item.dest_source,
+            staging_root: stagingRoot,
+            target_folder: item.target_folder,
+            folder_name: item.folder_name,
+            proposed_filename: item.proposed_filename
+        };
+
+        try {
+            startJobStatusPolling();
+            const res = await fetch("/api/intake/import", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (data.ok) {
+                intakeStates[index] = "done";
+                if (msg) {
+                    msg.style.color = "var(--green)";
+                    msg.innerText = data.message;
+                }
+                if (btn) btn.innerText = "Imported";
+                if (card) card.style.borderColor = "var(--green)";
+            } else {
+                intakeStates[index] = "failed";
+                if (msg) {
+                    msg.style.color = "var(--red)";
+                    msg.innerText = data.message;
+                }
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerText = "Retry Import";
+                }
+                if (skipBtn) skipBtn.disabled = false;
+            }
+        } catch (err) {
+            intakeStates[index] = "failed";
+            if (msg) {
+                msg.style.color = "var(--red)";
+                msg.innerText = `Error: ${err.message}`;
+            }
+            if (btn) {
+                btn.disabled = false;
+                btn.innerText = "Retry Import";
+            }
+            if (skipBtn) skipBtn.disabled = false;
+        } finally {
+            if (!bulkIntakeRunning) stopJobStatusPolling();
+            updateBulkIntakeButtonState();
+            refreshLogs();
+        }
+    }
+
+    async function approveAllSafeImports() {
+        const todo = lastIntakeItems
+            .map((item, i) => ({ item, i }))
+            .filter(({ item, i }) => intakeStates[i] === "pending" && !item.source.locked);
+        if (todo.length === 0) return;
+
+        todo.forEach(({ item, i }) => {
+            intakeStates[i] = "queued";
+            const btn = document.getElementById(`intake-exec-${i}`);
+            const skipBtn = document.getElementById(`intake-skip-${i}`);
+            const msg = document.getElementById(`intake-status-${i}`);
+            if (skipBtn) skipBtn.disabled = true;
+            if (msg) {
+                msg.style.color = "var(--accent)";
+                msg.innerText = "Queued for staging import...";
+            }
+            enqueueAction(`Intake Import: ${item.title}`, btn, () => executeIntakeImport(i));
+        });
+        updateBulkIntakeButtonState();
+    }
+
+    async function refreshLogs() {
+        const res = await fetch("/api/logs");
+        const data = await res.json();
+        const box = document.getElementById("logBox");
+        if (data.log_file_path) {
+            document.getElementById("logPathHint").innerText = `(${data.log_file_path})`;
+        }
+        box.innerHTML = (data.logs || []).map(l => `
+            <div class="log-line log-${escapeHtml(l.level)}">[${escapeHtml(l.time)}] [${escapeHtml(l.level)}] ${escapeHtml(l.message)}</div>
+        `).join("");
+    }
+
+    // --- LIBRARY MAINTENANCE (SPINNING HDD DEFRAG) ---
+    function openMaintenanceModal() {
+        openDialog("maintenanceModal");
+        loadMaintenanceStatus(true);
+    }
+
+    function updateScheduleFieldVisibility() {
+        const sched = document.getElementById("maintSchedule").value;
+        document.getElementById("maintDowWrap").style.display = (sched === "weekly" || sched === "biweekly") ? "block" : "none";
+        document.getElementById("maintDomWrap").style.display = (sched === "monthly") ? "block" : "none";
+    }
+
+    function renderMaintenanceUI(data, populateInputs = false) {
+        const maintBadge = document.getElementById("maintBadge");
+        const st = data.state || {};
+        if (st.running) {
+            maintBadge.className = "badge badge-warn";
+            maintBadge.innerText = `HDD Defrag: Running (${st.processed_files || 0}/${st.total_files || 0})`;
+        } else if (data.enabled) {
+            maintBadge.className = "badge badge-online";
+            maintBadge.innerText = `HDD Defrag: ${data.schedule.toUpperCase()} (${data.next_run})`;
+        } else {
+            maintBadge.className = "badge badge-warn";
+            maintBadge.innerText = "HDD Defrag: OFF";
+        }
+
+        if (populateInputs) {
+            document.getElementById("maintEnabled").checked = Boolean(data.enabled);
+            document.getElementById("maintSchedule").value = data.schedule || "weekly";
+            document.getElementById("maintDayOfWeek").value = data.day_of_week || "Sunday";
+            document.getElementById("maintDayOfMonth").value = data.day_of_month || 1;
+            document.getElementById("maintTime").value = data.time || "03:00";
+            document.getElementById("contigPath").value = data.contig_path || "";
+            updateScheduleFieldVisibility();
+        }
+
+        const contigBadge = document.getElementById("contigStatusBadge");
+        const contigHint = document.getElementById("contigResolvedHint");
+        const hasAnyEngine = data.active_engine && data.active_engine !== "none";
+        if (data.active_engine === "contig") {
+            contigBadge.className = "badge badge-online";
+            contigBadge.innerText = "Engine: Contig (File-Level)";
+            contigHint.innerText = `Resolved: ${data.contig_resolved_path}`;
+        } else if (data.active_engine === "windows_defrag") {
+            contigBadge.className = "badge badge-drive";
+            contigBadge.innerText = "Engine: Windows defrag.exe";
+            contigHint.innerText = data.is_admin
+                ? `Fallback active: ${data.active_engine_path} (Admin privileges OK)`
+                : `Fallback active: ${data.active_engine_path} (Tip: run as Administrator for defrag.exe, or supply contig64.exe)`;
+        } else {
+            contigBadge.className = "badge badge-offline";
+            contigBadge.innerText = "No Engine Found";
+            contigHint.innerText = "Place contig64.exe in the app folder or enter its full path above.";
+        }
+
+        document.getElementById("maintNextRun").innerText = data.next_run || "Disabled";
+        document.getElementById("maintLastRun").innerText = st.last_run_at || "Never";
+
+        const progressText = document.getElementById("maintProgressText");
+        const progressBar = document.getElementById("maintProgressBar");
+        if (st.running) {
+            const unitLabel = data.active_engine === "windows_defrag" ? "HDD(s)" : "file(s)";
+            progressText.innerHTML =
+                `<strong>Running:</strong> ${st.processed_files}/${st.total_files} ${unitLabel} &bull; Defragged: ${st.defragged_files}${data.active_engine === "contig" ? ` &bull; Locked skipped: ${st.skipped_locked}` : ""}<br>` +
+                `Current: [${escapeHtml(st.current_drive || "...")}] ${escapeHtml(st.current_file || "")}`;
+            progressBar.style.display = "block";
+            progressBar.max = Math.max(1, st.total_files || 1);
+            progressBar.value = st.processed_files || 0;
+        } else {
+            progressText.innerText = `Status: ${st.last_result || "Idle"}`;
+            progressBar.style.display = "none";
+        }
+
+        const runBtn = document.getElementById("maintRunNowBtn");
+        const stopBtn = document.getElementById("maintStopBtn");
+        runBtn.disabled = Boolean(st.running) || !hasAnyEngine;
+        stopBtn.style.display = st.running ? "inline-block" : "none";
+
+        const driveList = document.getElementById("maintDriveList");
+        const drives = data.drives || [];
+        if (drives.length === 0) {
+            driveList.innerHTML = `<li style="color:var(--muted); font-size:12px;">No library folders configured yet. Add them in Library &amp; Drives.</li>`;
+        } else {
+            driveList.innerHTML = drives.map(d => {
+                const typeBadgeClass = d.media_type === "HDD"
+                    ? "badge-online"
+                    : (d.media_type === "SSD" ? "badge-offline" : "badge-warn");
+                const nextType = d.media_type === "HDD" ? "SSD" : "HDD";
+                const typeControl = d.can_toggle
+                    ? `<button type="button" class="badge-btn ${typeBadgeClass}" data-toggle-drive="${escapeHtml(d.drive)}" data-next-type="${nextType}" title="Click to set ${escapeHtml(d.drive)} as ${nextType}">${escapeHtml(d.media_type)}${d.manual_override ? " (Manual)" : ""} &#x21C4; ${nextType}</button>`
+                    : `<span class="badge ${typeBadgeClass}">${escapeHtml(d.media_type)}</span>`;
+                return `
+                    <li class="folder-item" style="flex-direction:column; align-items:flex-start; gap:4px;">
+                        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px;">
+                            <span class="badge badge-drive">${escapeHtml(d.drive)}</span>
+                            ${typeControl}
+                            <span class="badge ${d.eligible ? 'badge-online' : 'badge-offline'}">${d.eligible ? 'Eligible' : 'Skipped'}</span>
+                        </div>
+                        <div style="font-size:12px; color:var(--muted);">${escapeHtml(d.reason)}</div>
+                    </li>
+                `;
+            }).join("");
+        }
+
+        if (st.running && !maintPollTimer) {
+            maintPollTimer = setInterval(() => loadMaintenanceStatus(false), 2500);
+        } else if (!st.running && maintPollTimer) {
+            clearInterval(maintPollTimer);
+            maintPollTimer = null;
+            refreshLogs();
+        }
+    }
+
+    async function loadMaintenanceStatus(forceRefresh = false) {
+        const res = await fetch(`/api/maintenance/status${forceRefresh ? "?refresh=1" : ""}`);
+        const data = await res.json();
+        renderMaintenanceUI(data, forceRefresh || !maintPollTimer);
+    }
+
+    async function saveMaintenanceSettings() {
+        const feedback = document.getElementById("maintFeedback");
+        feedback.style.color = "var(--muted)";
+        feedback.innerText = "Saving Library Maintenance schedule...";
+
+        const payload = {
+            maintenance_enabled: document.getElementById("maintEnabled").checked,
+            maintenance_schedule: document.getElementById("maintSchedule").value,
+            maintenance_day_of_week: document.getElementById("maintDayOfWeek").value,
+            maintenance_day_of_month: parseInt(document.getElementById("maintDayOfMonth").value, 10) || 1,
+            maintenance_time: document.getElementById("maintTime").value || "03:00",
+            contig_path: document.getElementById("contigPath").value.trim()
+        };
+
+        const res = await fetch("/api/maintenance/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.ok) {
+            feedback.style.color = "var(--green)";
+            feedback.innerText = data.message;
+            if (data.maintenance) renderMaintenanceUI(data.maintenance, true);
+        } else {
+            feedback.style.color = "var(--red)";
+            feedback.innerText = data.message || "Failed to save maintenance settings.";
+        }
+        refreshLogs();
+    }
+
+    async function runMaintenanceNow() {
+        const feedback = document.getElementById("maintFeedback");
+        feedback.style.color = "var(--muted)";
+        feedback.innerText = "Starting HDD defragmentation...";
+
+        const res = await fetch("/api/maintenance/run_now", { method: "POST" });
+        const data = await res.json();
+        feedback.style.color = data.ok ? "var(--green)" : "var(--red)";
+        feedback.innerText = data.message;
+        if (data.maintenance) renderMaintenanceUI(data.maintenance, false);
+        refreshLogs();
+    }
+
+    async function stopMaintenanceNow() {
+        const feedback = document.getElementById("maintFeedback");
+        const res = await fetch("/api/maintenance/stop", { method: "POST" });
+        const data = await res.json();
+        feedback.style.color = data.ok ? "var(--amber)" : "var(--red)";
+        feedback.innerText = data.message;
+        if (data.maintenance) renderMaintenanceUI(data.maintenance, false);
+        refreshLogs();
+    }
+
+    async function setDriveMediaType(drive, mediaType) {
+        const feedback = document.getElementById("maintFeedback");
+        feedback.style.color = "var(--muted)";
+        feedback.innerText = `Setting ${drive} to ${mediaType}...`;
+
+        const res = await fetch("/api/maintenance/drive_type", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ drive, media_type: mediaType })
+        });
+        const data = await res.json();
+        feedback.style.color = data.ok ? "var(--green)" : "var(--red)";
+        feedback.innerText = data.message || "Drive type updated.";
+        if (data.maintenance) renderMaintenanceUI(data.maintenance, false);
+        refreshLogs();
+    }
+
+    // --- COLLECTIONS MANAGER ---
+    function openCollectionsModal() {
+        openDialog("collectionsModal");
+        loadCollectionsOverview();
+    }
+
+    function switchCollectionsTab(tab) {
+        const isNative = tab === "native";
+        document.getElementById("tabNativeBtn").classList.toggle("active", isNative);
+        document.getElementById("tabCustomBtn").classList.toggle("active", !isNative);
+        document.getElementById("tabNativeBtn").setAttribute("aria-selected", String(isNative));
+        document.getElementById("tabCustomBtn").setAttribute("aria-selected", String(!isNative));
+        document.getElementById("nativeCollectionsPanel").style.display = isNative ? "block" : "none";
+        document.getElementById("customCollectionsPanel").style.display = isNative ? "none" : "block";
+    }
+
+    async function loadCollectionsOverview() {
+        const statusEl = document.getElementById("collectionsStatus");
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = "Loading collections and root folders from Radarr...";
+        try {
+            const res = await fetch("/api/collections");
+            collectionsOverview = await res.json();
+            if (!collectionsOverview.connected) {
+                statusEl.style.color = "var(--amber)";
+                statusEl.innerText = `Radarr not connected: ${collectionsOverview.error || "Configure Radarr URL & API Key in Settings."}`;
+            } else {
+                statusEl.style.color = "var(--green)";
+                const exclTxt = collectionsOverview.excluded_custom_count > 0
+                    ? ` (${collectionsOverview.excluded_custom_count} custom-collection movie(s) excluded from general scan)`
+                    : "";
+                statusEl.innerText = `Loaded ${collectionsOverview.native_collections.length} native collection(s), ${collectionsOverview.custom_collections.length} custom collection(s), and ${collectionsOverview.movies.length} library movie(s).${exclTxt}`;
+            }
+            renderCollectionsUI();
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Failed to load collections: ${err.message}`;
+        }
+    }
+
+    function buildRootFolderOptionsHtml(currentRoot) {
+        const apiRoots = (collectionsOverview && collectionsOverview.root_folders) ? collectionsOverview.root_folders : [];
+        const mergedMap = new Map();
+        apiRoots.forEach(rf => {
+            if (rf && rf.path) mergedMap.set(rf.path.toLowerCase(), rf);
+        });
+        (appConfig.library_folders || []).forEach(lf => {
+            if (lf && !mergedMap.has(lf.toLowerCase())) {
+                const drv = (lf.match(/^[A-Za-z]:/) || ["LOCAL"])[0].toUpperCase();
+                mergedMap.set(lf.toLowerCase(), { path: lf, drive: drv, online: true, free_gb: null });
+            }
+        });
+        const roots = Array.from(mergedMap.values()).sort((a, b) => {
+            const da = (a.drive || "").toLowerCase();
+            const db = (b.drive || "").toLowerCase();
+            if (da !== db) return da.localeCompare(db);
+            return (a.path || "").toLowerCase().localeCompare((b.path || "").toLowerCase());
+        });
+        if (roots.length === 0) {
+            return `<option value="">No library or Radarr root folders found</option>`;
+        }
+        return roots.map(rf => {
+            const freeTxt = rf.free_gb !== null ? ` (${rf.free_gb} GB free)` : "";
+            const offTxt = rf.online ? "" : " [OFFLINE]";
+            const sel = currentRoot && currentRoot.toLowerCase() === rf.path.toLowerCase() ? "selected" : "";
+            return `<option value="${escapeHtml(rf.path)}" ${sel}>${escapeHtml(rf.path)}${freeTxt}${offTxt}</option>`;
+        }).join("");
+    }
+
+    function renderCollectionCardHtml(c, type, idx) {
+        const allMovies = c.movies || [];
+        const visibleMovies = filterMisplacedOnly
+            ? allMovies.filter(m => m.in_collection_root === false)
+            : allMovies;
+
+        const drivesHtml = (c.drives && c.drives.length > 0)
+            ? c.drives.map(d => `<span class="badge badge-drive">${escapeHtml(d)}</span>`).join(" ")
+            : `<span class="badge badge-warn">No Files</span>`;
+        const splitBadge = (c.drives && c.drives.length > 1)
+            ? `<span class="badge badge-warn">Split Across ${c.drives.length} Drives</span>`
+            : "";
+        const misplacedBadge = (c.misplaced_count && c.misplaced_count > 0)
+            ? `<span class="badge badge-offline">${c.misplaced_count} Not in Root</span>`
+            : "";
+        const ignoredBadge = (c.ignored_count && c.ignored_count > 0)
+            ? `<span class="badge badge-warn">${c.ignored_count} Ignored</span>`
+            : "";
+        const cTags = (type === "custom")
+            ? ((c.radarr_tags && c.radarr_tags.length > 0) ? c.radarr_tags : (c.radarr_tag ? [c.radarr_tag] : []))
+            : [];
+        const tagBadge = cTags.map(t => `<span class="badge badge-online">Tag: ${escapeHtml(t)}</span>`).join(" ");
+        const moviesPreview = visibleMovies.map(m => {
+            const isOut = m.in_collection_root === false && !m.location_ignored;
+            const flag = isOut
+                ? `<span class="badge badge-offline" style="margin-right:4px;">OUTSIDE ROOT</span>`
+                : (m.location_ignored ? `<span class="badge badge-warn" style="margin-right:4px;">IGNORED</span>` : "");
+            let ignoreBtn = "";
+            if (isOut && m.ignore_key) {
+                ignoreBtn = ` <button type="button" class="btn-secondary btn-sm" style="padding:1px 7px; font-size:11px; margin-left:6px;" data-ignore-loc="${escapeHtml(m.ignore_key)}" data-ignore-val="1" data-ignore-title="${escapeHtml(m.title)}" title="Remember not to report this movie as being in the wrong folder">Ignore</button>`;
+            } else if (m.location_ignored && m.ignore_key) {
+                ignoreBtn = ` <button type="button" class="btn-secondary btn-sm" style="padding:1px 7px; font-size:11px; margin-left:6px;" data-ignore-loc="${escapeHtml(m.ignore_key)}" data-ignore-val="0" data-ignore-title="${escapeHtml(m.title)}" title="Stop ignoring this movie's location">Restore</button>`;
+            }
+            return `<div style="margin-bottom:4px;">&bull; ${flag}${escapeHtml(m.title)} (${escapeHtml(m.year)}) — <code>${escapeHtml(m.path || "No path")}</code> (${m.size_gb} GB)${ignoreBtn}</div>`;
+        }).join("") || `<div>No matching movies currently in Radarr library.</div>`;
+
+        const selectId = `coll-root-${type}-${idx}`;
+        const cardNote = collectionRootNotes[`${type}:${idx}`] || "";
+        const customBtns = type === "custom"
+            ? `<button type="button" class="btn-secondary btn-sm" data-edit-custom="${escapeHtml(c.id)}">Edit</button>
+               <button type="button" class="btn-secondary btn-sm" data-remove-custom-only="${escapeHtml(c.id)}">Remove List Only</button>`
+            : "";
+        const moveBtnLabel = filterMisplacedOnly
+            ? `Move ${visibleMovies.length} Misplaced to Root`
+            : "Bulk Move All to Root";
+
+        return `
+            <article class="coll-card">
+                <div class="coll-card-head">
+                    <div>
+                        <strong style="font-size:15px;">${escapeHtml(c.name)}</strong>
+                        <span class="badge badge-drive" style="margin-left:6px;">${c.movie_count} Movie(s)</span>
+                        <span class="badge badge-drive">${c.total_size_gb} GB</span>
+                        ${drivesHtml}
+                        ${splitBadge}
+                        ${misplacedBadge}
+                        ${ignoredBadge}
+                        ${tagBadge}
+                    </div>
+                    <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+                        ${customBtns}
+                        <button type="button" class="btn-danger" data-open-bulk-delete="${type}:${idx}" ${c.movie_count === 0 && type === "native" ? "disabled" : ""}>Bulk Delete...</button>
+                    </div>
+                </div>
+                ${c.root_folder ? `<div style="font-size:11px; color:var(--muted); margin-bottom:6px;">Collection Root: <code>${escapeHtml(c.root_folder)}</code></div>` : ""}
+                <div class="input-row" style="margin-bottom:6px;">
+                    <select id="${selectId}" data-coll-root-select="${type}:${idx}" aria-label="Target root folder for ${escapeHtml(c.name)}">
+                        ${buildRootFolderOptionsHtml(c.root_folder || "")}
+                    </select>
+                    ${type === "custom" ? `<button type="button" class="btn-amber btn-sm" data-create-custom-root="${idx}" title="Create a new dedicated root folder on disk and register it in Radarr">+ New Root</button>` : ""}
+                    <button type="button" class="btn-green btn-sm" data-bulk-move="${type}:${idx}" data-select-id="${selectId}" ${visibleMovies.length === 0 ? "disabled" : ""}>${moveBtnLabel}</button>
+                </div>
+                ${cardNote ? `<div style="font-size:12px; color:var(--green); margin-bottom:6px;">${escapeHtml(cardNote)}</div>` : ""}
+                <details ${filterMisplacedOnly || cardNote ? "open" : ""}>
+                    <summary style="font-size:12px; color:var(--accent); cursor:pointer;">Show ${visibleMovies.length}${filterMisplacedOnly ? ` misplaced of ${c.movie_count}` : ""} movie(s) in collection</summary>
+                    <div class="coll-movie-list">${moviesPreview}</div>
+                </details>
+            </article>
+        `;
+    }
+
+    function collectionMatchesQuery(c, q) {
+        if (filterMisplacedOnly && !(c.misplaced_count > 0)) return false;
+        if (!q) return true;
+        const tags = (c.radarr_tags && c.radarr_tags.length > 0) ? c.radarr_tags : (c.radarr_tag ? [c.radarr_tag] : []);
+        const targetMovies = filterMisplacedOnly ? (c.movies || []).filter(m => m.in_collection_root === false) : (c.movies || []);
+        const movieText = targetMovies.map(m => `${m.title} ${m.year} ${m.drive || ""} ${m.path || ""}`).join(" ");
+        const haystack = `${c.name || ""} ${(c.drives || []).join(" ")} ${tags.join(" ")} ${movieText}`.toLowerCase();
+        return haystack.includes(q);
+    }
+
+    function renderCollectionsUI() {
+        if (!collectionsOverview) return;
+        const nativeList = collectionsOverview.native_collections || [];
+        const customList = collectionsOverview.custom_collections || [];
+
+        const filterText = (document.getElementById("collectionsSearchInput").value || "").trim().toLowerCase();
+
+        const filteredNative = nativeList
+            .map((c, origIdx) => ({ c, origIdx }))
+            .filter(item => collectionMatchesQuery(item.c, filterText));
+
+        const filteredCustom = customList
+            .map((c, origIdx) => ({ c, origIdx }))
+            .filter(item => collectionMatchesQuery(item.c, filterText));
+
+        document.getElementById("nativeCollCount").innerText = filterText
+            ? `${filteredNative.length}/${nativeList.length}`
+            : nativeList.length;
+        document.getElementById("customCollCount").innerText = filterText
+            ? `${filteredCustom.length}/${customList.length}`
+            : customList.length;
+
+        const nativeContainer = document.getElementById("nativeCollectionsList");
+        if (filteredNative.length === 0) {
+            nativeContainer.innerHTML = `<div class="card" style="background:var(--bg); color:var(--muted); font-size:13px;">${filterText ? `No native collections or movies match "${escapeHtml(filterText)}".` : "No native Radarr collections found."}</div>`;
+        } else {
+            nativeContainer.innerHTML = filteredNative.map(item => renderCollectionCardHtml(item.c, "native", item.origIdx)).join("");
+        }
+
+        const customContainer = document.getElementById("customCollectionsList");
+        if (filteredCustom.length === 0) {
+            customContainer.innerHTML = `<div style="color:var(--muted); font-size:13px;">${filterText ? `No custom collections or movies match "${escapeHtml(filterText)}".` : 'No custom collections created yet. Create one like "Marvel MCU Movies" or "DCU Movies" on the left.'}</div>`;
+        } else {
+            customContainer.innerHTML = filteredCustom.map(item => renderCollectionCardHtml(item.c, "custom", item.origIdx)).join("");
+        }
+
+        renderCustomTagPicker();
+        renderCustomMoviePicker();
+    }
+
+    function renderCustomTagPicker() {
+        const box = document.getElementById("customTagPicker");
+        const tags = (collectionsOverview && collectionsOverview.tags) ? collectionsOverview.tags : [];
+        document.getElementById("customTagSelectedCount").innerText = selectedCustomTags.size;
+
+        if (tags.length === 0) {
+            box.innerHTML = `<span style="color:var(--muted); font-size:12px;">No existing Radarr tags found (or Radarr not connected).</span>`;
+            return;
+        }
+
+        box.innerHTML = tags.map(t => {
+            const checked = selectedCustomTags.has(t.label) ? "checked" : "";
+            return `
+                <label class="tag-chip-label">
+                    <input type="checkbox" data-pick-tag="${escapeHtml(t.label)}" ${checked}>
+                    <span>${escapeHtml(t.label)} <span style="color:var(--muted);">(${t.movie_count})</span></span>
+                </label>
+            `;
+        }).join("");
+    }
+
+    function collectMoviesFromSelectedTags() {
+        const statusEl = document.getElementById("collectionsStatus");
+        if (!collectionsOverview || selectedCustomTags.size === 0) {
+            statusEl.style.color = "var(--amber)";
+            statusEl.innerText = "Select one or more existing Radarr tags first to collect their movies.";
+            return;
+        }
+        const tagIds = new Set(
+            (collectionsOverview.tags || [])
+                .filter(t => selectedCustomTags.has(t.label))
+                .map(t => t.id)
+        );
+        let added = 0;
+        (collectionsOverview.movies || []).forEach(m => {
+            if (m.tmdb_id && (m.tags || []).some(tid => tagIds.has(tid))) {
+                if (!selectedCustomTmdbs.has(m.tmdb_id)) {
+                    selectedCustomTmdbs.add(m.tmdb_id);
+                    added++;
+                }
+            }
+        });
+        renderCustomMoviePicker();
+        statusEl.style.color = "var(--green)";
+        statusEl.innerText = `Collected ${added} additional movie(s) from selected tag(s) (${selectedCustomTmdbs.size} total selected).`;
+    }
+
+    function renderCustomMoviePicker() {
+        const picker = document.getElementById("customMoviePicker");
+        const q = (document.getElementById("customMovieSearch").value || "").trim().toLowerCase();
+        const movies = (collectionsOverview && collectionsOverview.movies) ? collectionsOverview.movies : [];
+        document.getElementById("customSelectedCount").innerText = selectedCustomTmdbs.size;
+
+        if (movies.length === 0) {
+            picker.innerHTML = `<div style="color:var(--muted); font-size:12px;">Connect Radarr in Settings to pick movies from your library.</div>`;
+            return;
+        }
+
+        const filtered = movies.filter(m => !q || `${m.title} ${m.year}`.toLowerCase().includes(q)).slice(0, 150);
+        picker.innerHTML = filtered.map(m => {
+            const checked = selectedCustomTmdbs.has(m.tmdb_id) ? "checked" : "";
+            return `
+                <label class="movie-pick-row">
+                    <input type="checkbox" data-pick-tmdb="${escapeHtml(m.tmdb_id)}" ${checked}>
+                    <span>${escapeHtml(m.title)} (${escapeHtml(m.year)}) <span style="color:var(--muted);">[${escapeHtml(m.drive || "No Drive")}]</span></span>
+                </label>
+            `;
+        }).join("");
+    }
+
+    function resetCustomCollectionForm() {
+        document.getElementById("customFormHeading").innerText = "Create Custom Collection";
+        document.getElementById("customCollId").value = "";
+        document.getElementById("customCollName").value = "";
+        document.getElementById("customCollTag").value = "";
+        document.getElementById("customCollRootFolder").value = "";
+        document.getElementById("customCollSyncTag").checked = false;
+        selectedCustomTmdbs.clear();
+        selectedCustomTags.clear();
+        renderCustomTagPicker();
+        renderCustomMoviePicker();
+    }
+
+    function editCustomCollection(customId) {
+        if (!collectionsOverview) return;
+        const entry = (collectionsOverview.custom_collections || []).find(c => c.id === customId);
+        if (!entry) return;
+        document.getElementById("customFormHeading").innerText = `Edit Custom Collection: ${entry.name}`;
+        document.getElementById("customCollId").value = entry.id;
+        document.getElementById("customCollName").value = entry.name;
+        document.getElementById("customCollRootFolder").value = entry.root_folder || "";
+        const entryTags = (entry.radarr_tags && entry.radarr_tags.length > 0)
+            ? entry.radarr_tags
+            : (entry.radarr_tag ? [entry.radarr_tag] : []);
+        const existingRadarrTagLabels = new Set((collectionsOverview.tags || []).map(t => t.label));
+        selectedCustomTags = new Set(entryTags.filter(t => existingRadarrTagLabels.has(t)));
+        const extraTags = entryTags.filter(t => !existingRadarrTagLabels.has(t));
+        document.getElementById("customCollTag").value = extraTags.join(", ");
+        selectedCustomTmdbs = new Set(entry.tmdb_ids || []);
+        renderCustomTagPicker();
+        renderCustomMoviePicker();
+    }
+
+    async function saveCustomCollectionForm() {
+        const statusEl = document.getElementById("collectionsStatus");
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = "Saving custom collection...";
+
+        const payload = {
+            id: document.getElementById("customCollId").value.trim(),
+            name: document.getElementById("customCollName").value.trim(),
+            radarr_tag: document.getElementById("customCollTag").value.trim(),
+            radarr_tags: Array.from(selectedCustomTags),
+            root_folder: document.getElementById("customCollRootFolder").value.trim(),
+            sync_tag: document.getElementById("customCollSyncTag").checked,
+            tmdb_ids: Array.from(selectedCustomTmdbs)
+        };
+
+        const res = await fetch("/api/collections/custom/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        statusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+        statusEl.innerText = data.message;
+        if (data.ok) {
+            if (data.overview) collectionsOverview = data.overview;
+            resetCustomCollectionForm();
+            renderCollectionsUI();
+        }
+        refreshLogs();
+    }
+
+    async function removeCustomCollectionOnly(customId) {
+        const statusEl = document.getElementById("collectionsStatus");
+        const res = await fetch("/api/collections/custom/remove", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: customId })
+        });
+        const data = await res.json();
+        statusEl.style.color = data.ok ? "var(--amber)" : "var(--red)";
+        statusEl.innerText = data.message;
+        if (data.ok && data.overview) {
+            collectionsOverview = data.overview;
+            renderCollectionsUI();
+        }
+        refreshLogs();
+    }
+
+    function getCollectionByKey(key) {
+        if (!collectionsOverview || !key) return null;
+        const [type, idxStr] = key.split(":");
+        const idx = parseInt(idxStr, 10);
+        const list = type === "native" ? collectionsOverview.native_collections : collectionsOverview.custom_collections;
+        return list && list[idx] ? { type, entry: list[idx] } : null;
+    }
+
+    async function toggleIgnoreMovieLocation(ignoreKey, ignoreFlag, title) {
+        const statusEl = document.getElementById("collectionsStatus");
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = ignoreFlag ? `Ignoring location warning for '${title}'...` : `Restoring location check for '${title}'...`;
+        try {
+            const res = await fetch("/api/collections/ignore_location", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ignore_key: ignoreKey, ignore: ignoreFlag, title })
+            });
+            const data = await res.json();
+            statusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+            statusEl.innerText = data.message;
+            if (data.ok && data.overview) {
+                collectionsOverview = data.overview;
+                renderCollectionsUI();
+            }
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Ignore update failed: ${err.message}`;
+        } finally {
+            refreshLogs();
+        }
+    }
+
+    function updateCreateCustomRootPreview() {
+        const parent = (document.getElementById("createCustomRootParent").value || "").trim().replace(/[\\/]+$/, "");
+        const name = (document.getElementById("createCustomRootName").value || "").trim().replace(/^[\\/]+/, "");
+        const previewEl = document.getElementById("createCustomRootPreview");
+        if (!previewEl) return;
+        previewEl.innerText = (parent && name)
+            ? `New Root Folder: ${parent}\\${name}`
+            : "Enter a parent folder and collection folder name above.";
+    }
+
+    function openCreateCustomRootDialog(mode, customIdx = null) {
+        let customId = "";
+        let collName = "";
+        let defaultParent = "";
+
+        if (mode === "card" && customIdx !== null && collectionsOverview) {
+            const entry = (collectionsOverview.custom_collections || [])[customIdx];
+            if (!entry) return;
+            customId = entry.id || "";
+            collName = entry.name || "";
+            if (entry.root_folder) {
+                const parts = entry.root_folder.replace(/[\\/]+$/, "").split(/[\\/]/);
+                if (parts.length > 1) {
+                    parts.pop();
+                    defaultParent = parts.join("\\");
+                }
+            }
+        } else {
+            customId = (document.getElementById("customCollId").value || "").trim();
+            collName = (document.getElementById("customCollName").value || "").trim();
+            const curVal = (document.getElementById("customCollRootFolder").value || "").trim();
+            if (curVal) defaultParent = curVal;
+        }
+
+        if (!defaultParent) {
+            const firstLib = (appConfig.library_folders || [])[0] || "";
+            if (firstLib) {
+                const parts = firstLib.replace(/[\\/]+$/, "").split(/[\\/]/);
+                if (parts.length > 1) {
+                    parts.pop();
+                    defaultParent = parts.join("\\");
+                } else {
+                    defaultParent = firstLib;
+                }
+            }
+        }
+
+        document.getElementById("createCustomRootMode").value = mode;
+        document.getElementById("createCustomRootTargetId").value = customId;
+        document.getElementById("createCustomRootTargetName").value = collName || "Custom Collection";
+        document.getElementById("createCustomRootParent").value = defaultParent;
+        document.getElementById("createCustomRootName").value = collName;
+        document.getElementById("createCustomRootFeedback").innerText = "";
+        updateCreateCustomRootPreview();
+        openModal("createCustomRootModal");
+    }
+
+    async function submitCreateCustomRootForm() {
+        const fb = document.getElementById("createCustomRootFeedback");
+        const statusEl = document.getElementById("collectionsStatus");
+        const mode = document.getElementById("createCustomRootMode").value;
+        const customId = document.getElementById("createCustomRootTargetId").value.trim();
+        const collName = document.getElementById("createCustomRootTargetName").value.trim();
+        const parentFolder = document.getElementById("createCustomRootParent").value.trim();
+        const folderName = document.getElementById("createCustomRootName").value.trim();
+        const btn = document.getElementById("confirmCreateCustomRootBtn");
+
+        if (!parentFolder || !folderName) {
+            fb.style.color = "var(--red)";
+            fb.innerText = "Both parent folder and new folder name are required.";
+            return;
+        }
+
+        btn.disabled = true;
+        fb.style.color = "var(--accent)";
+        fb.innerText = "Creating folder on disk and registering in Radarr...";
+        try {
+            const res = await fetch("/api/collections/custom/create_root", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    parent_folder: parentFolder,
+                    folder_name: folderName,
+                    custom_id: mode === "card" ? customId : "",
+                    collection_name: collName || folderName
+                })
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                fb.style.color = "var(--red)";
+                fb.innerText = data.message || "Failed to create custom root folder.";
+                return;
+            }
+            if (data.detail && data.detail.path && mode === "form") {
+                document.getElementById("customCollRootFolder").value = data.detail.path;
+            }
+            if (data.overview) {
+                collectionsOverview = data.overview;
+            }
+            if (data.folder_status) {
+                appConfig.library_folders = (data.folder_status.library_folders || []).map(f => f.path);
+                renderFolderLists(data.folder_status);
+                renderDrivePies(data.folder_status);
+            }
+            closeModal("createCustomRootModal");
+            statusEl.style.color = "var(--green)";
+            statusEl.innerText = data.message;
+            renderCollectionsUI();
+        } catch (err) {
+            fb.style.color = "var(--red)";
+            fb.innerText = `Create failed: ${err.message}`;
+        } finally {
+            btn.disabled = false;
+            refreshLogs();
+        }
+    }
+
+    async function handleCollectionRootChange(key, newRoot) {
+        const resolved = getCollectionByKey(key);
+        if (!resolved || !newRoot) return;
+        const { type, entry } = resolved;
+        const statusEl = document.getElementById("collectionsStatus");
+
+        statusEl.style.color = "var(--accent)";
+        statusEl.innerText = `Updating root folder for '${entry.name}' to ${newRoot} and scanning...`;
+        try {
+            const res = await fetch("/api/collections/set_root", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    collection_type: type,
+                    collection_name: entry.name,
+                    collection_id: type === "native" ? entry.id : null,
+                    custom_id: type === "custom" ? entry.id : "",
+                    root_folder: newRoot
+                })
+            });
+            const data = await res.json();
+            statusEl.style.color = data.ok ? "var(--green)" : "var(--amber)";
+            statusEl.innerText = data.message;
+            if (data.ok) {
+                collectionRootNotes[key] = data.message;
+                if (data.overview) {
+                    collectionsOverview = data.overview;
+                    renderCollectionsUI();
+                }
+            }
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Root folder update failed: ${err.message}`;
+        } finally {
+            refreshLogs();
+        }
+    }
+
+    async function executeBulkMove(key, selectId, triggerBtn, createIfMissing = false) {
+        const resolved = getCollectionByKey(key);
+        if (!resolved) return;
+        const { type, entry } = resolved;
+        const targetRoot = document.getElementById(selectId).value;
+        const statusEl = document.getElementById("collectionsStatus");
+
+        if (!targetRoot) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = "Please select a target root folder first.";
+            return;
+        }
+
+        const origText = triggerBtn ? triggerBtn.innerText : "Bulk Move All to Root";
+        if (triggerBtn) {
+            triggerBtn.disabled = true;
+            triggerBtn.innerText = createIfMissing ? "Creating & Moving..." : "Moving...";
+        }
+        statusEl.style.color = "var(--accent)";
+        statusEl.innerText = createIfMissing
+            ? `Creating '${targetRoot}' and moving ${entry.movie_count} movie(s) in '${entry.name}'...`
+            : `Bulk moving ${entry.movie_count} movie(s) in '${entry.name}' to ${targetRoot}...`;
+
+        try {
+            startJobStatusPolling();
+            const targetMovieList = filterMisplacedOnly
+                ? (entry.movies || []).filter(m => m.in_collection_root === false)
+                : (entry.movies || []);
+            const res = await fetch("/api/collections/bulk_move", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    collection_name: entry.name,
+                    collection_id: type === "native" ? entry.id : null,
+                    movie_ids: targetMovieList.map(m => m.radarr_id).filter(Boolean),
+                    target_root_folder: targetRoot,
+                    create_if_missing: createIfMissing
+                })
+            });
+            const data = await res.json();
+            if (!data.ok && data.detail && data.detail.needs_create) {
+                pendingCreateRootMove = { key, selectId, triggerBtn };
+                document.getElementById("createRootSummary").innerHTML =
+                    `The target root folder <code>${escapeHtml(data.detail.target_root_folder)}</code> does not exist yet on disk.<br><br>` +
+                    `Would you like to create this folder now and move <strong>${entry.movie_count}</strong> movie(s) from <strong>${escapeHtml(entry.name)}</strong> into it?`;
+                statusEl.style.color = "var(--amber)";
+                statusEl.innerText = data.message;
+                openDialog("createRootModal");
+                return;
+            }
+            statusEl.style.color = data.ok ? "var(--green)" : "var(--amber)";
+            statusEl.innerText = data.message;
+            renderJobProgressUI({
+                active: false,
+                job_name: `Bulk Move: ${entry.name}`,
+                status: data.message,
+                overall_current: targetMovieList.length,
+                overall_total: targetMovieList.length,
+                overall_percent: 100
+            });
+            if (data.overview) {
+                collectionsOverview = data.overview;
+                renderCollectionsUI();
+            }
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Bulk move error: ${err.message}`;
+        } finally {
+            stopJobStatusPolling();
+            if (triggerBtn) {
+                triggerBtn.disabled = false;
+                triggerBtn.innerText = origText;
+            }
+            refreshLogs();
+        }
+    }
+
+    async function confirmCreateRootAndMove() {
+        if (!pendingCreateRootMove) return;
+        const { key, selectId, triggerBtn } = pendingCreateRootMove;
+        pendingCreateRootMove = null;
+        closeDialog("createRootModal");
+        await executeBulkMove(key, selectId, triggerBtn, true);
+    }
+
+    function openBulkDeleteConfirm(key) {
+        const resolved = getCollectionByKey(key);
+        if (!resolved) return;
+        pendingBulkDelete = resolved;
+        const { type, entry } = resolved;
+        document.getElementById("bulkDeleteSummary").innerHTML =
+            `You are about to remove <strong>${escapeHtml(entry.name)}</strong> (${entry.movie_count} movie(s), ${entry.total_size_gb} GB) from Radarr` +
+            (type === "custom" ? " and delete this custom collection from config.json." : " and unmonitor the collection in Radarr.");
+        document.getElementById("bulkDelFilesChk").checked = false;
+        document.getElementById("bulkDelExclChk").checked = true;
+        openDialog("bulkDeleteModal");
+    }
+
+    async function confirmBulkDelete() {
+        if (!pendingBulkDelete) return;
+        const { type, entry } = pendingBulkDelete;
+        const btn = document.getElementById("confirmBulkDeleteBtn");
+        const statusEl = document.getElementById("collectionsStatus");
+
+        btn.disabled = true;
+        btn.innerText = "Deleting...";
+        try {
+            const res = await fetch("/api/collections/bulk_delete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    collection_name: entry.name,
+                    collection_type: type,
+                    collection_id: type === "native" ? entry.id : null,
+                    custom_id: type === "custom" ? entry.id : "",
+                    movie_ids: (entry.movies || []).map(m => m.radarr_id).filter(Boolean),
+                    delete_files: document.getElementById("bulkDelFilesChk").checked,
+                    add_import_exclusion: document.getElementById("bulkDelExclChk").checked
+                })
+            });
+            const data = await res.json();
+            closeDialog("bulkDeleteModal");
+            statusEl.style.color = data.ok ? "var(--green)" : "var(--amber)";
+            statusEl.innerText = data.message;
+            if (data.overview) {
+                collectionsOverview = data.overview;
+                renderCollectionsUI();
+            }
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Bulk delete error: ${err.message}`;
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "Confirm Bulk Delete";
+            pendingBulkDelete = null;
+            loadQuarantineStatus();
+            refreshLogs();
+        }
+    }
+
+    // --- QUARANTINE VIEW & PURGE ---
+    let lastQuarantineData = null;
+
+    function openQuarantineModal() {
+        openDialog("quarantineModal");
+        loadQuarantineStatus();
+    }
+
+    function renderQuarantineUI(data) {
+        lastQuarantineData = data;
+        const count = data.item_count || 0;
+        const badge = document.getElementById("quarantineCountBadge");
+        if (badge) badge.innerText = count;
+
+        const statusEl = document.getElementById("quarantineStatus");
+        const purgeAllBtn = document.getElementById("purgeAllQuarantineBtn");
+        const ul = document.getElementById("quarantineList");
+
+        if (purgeAllBtn) {
+            purgeAllBtn.disabled = count === 0;
+            purgeAllBtn.innerText = count > 0
+                ? `Purge All (${count} item(s) / ${data.total_gb} GB)`
+                : "Purge All Quarantined Files";
+        }
+
+        if (count === 0) {
+            if (statusEl) {
+                statusEl.style.color = "var(--muted)";
+                statusEl.innerText = data.quarantine_mode === "recycle_bin"
+                    ? "No files in drive-local _RadarrCompanion_Quarantine folders (currently using Windows Recycle Bin mode)."
+                    : "No quarantined files found across your online drives.";
+            }
+            if (ul) ul.innerHTML = `<li style="color:var(--muted); font-size:13px;">Quarantine is empty.</li>`;
+            return;
+        }
+
+        if (statusEl) {
+            statusEl.style.color = "var(--accent)";
+            statusEl.innerText = `Found ${count} quarantined item(s) totalling ${data.total_gb} GB across ${(data.quarantine_roots || []).length} drive(s).`;
+        }
+
+        if (ul) {
+            ul.innerHTML = (data.items || []).map((it, idx) => {
+                const sizeLabel = it.size_gb >= 0.1 ? `${it.size_gb} GB` : `${it.size_mb} MB`;
+                return `
+                    <li class="folder-item">
+                        <div style="min-width:0; flex:1;">
+                            <div>
+                                <span class="badge badge-drive">${escapeHtml(it.drive)}</span>
+                                <span class="badge ${it.is_dir ? 'badge-warn' : 'badge-offline'}">${it.is_dir ? 'Folder' : 'File'}</span>
+                                <strong style="margin-left:6px; word-break:break-all;">${escapeHtml(it.name)}</strong>
+                            </div>
+                            <div style="font-size:11px; color:var(--muted); font-family:Consolas, monospace; margin-top:3px; word-break:break-all;">
+                                ${escapeHtml(it.path)} &bull; ${sizeLabel}${it.modified ? ` &bull; ${escapeHtml(it.modified)}` : ""}
+                            </div>
+                        </div>
+                        <button type="button" class="btn-danger" data-purge-index="${idx}" style="white-space:nowrap;">Purge</button>
+                    </li>
+                `;
+            }).join("");
+        }
+    }
+
+    async function loadQuarantineStatus() {
+        try {
+            const res = await fetch("/api/quarantine");
+            const data = await res.json();
+            renderQuarantineUI(data);
+        } catch (err) {
+            const statusEl = document.getElementById("quarantineStatus");
+            if (statusEl) {
+                statusEl.style.color = "var(--red)";
+                statusEl.innerText = `Could not load quarantine list: ${err.message}`;
+            }
+        }
+    }
+
+    async function purgeQuarantine(purgeAll, singlePath = "") {
+        const statusEl = document.getElementById("quarantineStatus");
+        const count = lastQuarantineData ? (lastQuarantineData.item_count || 0) : 0;
+        const totalGb = lastQuarantineData ? (lastQuarantineData.total_gb || 0) : 0;
+
+        const confirmMsg = purgeAll
+            ? `Permanently delete ALL ${count} quarantined item(s) (${totalGb} GB) from disk? This cannot be undone.`
+            : `Permanently delete this quarantined item from disk?\n\n${singlePath}\n\nThis cannot be undone.`;
+        if (!window.confirm(confirmMsg)) return;
+
+        statusEl.style.color = "var(--accent)";
+        statusEl.innerText = purgeAll ? "Purging all quarantined files..." : "Purging selected item...";
+
+        try {
+            const res = await fetch("/api/quarantine/purge", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(purgeAll ? { purge_all: true } : { paths: [singlePath] })
+            });
+            const data = await res.json();
+            if (data.quarantine) renderQuarantineUI(data.quarantine);
+            statusEl.style.color = data.ok ? "var(--green)" : "var(--amber)";
+            statusEl.innerText = data.message;
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Purge failed: ${err.message}`;
+        } finally {
+            refreshLogs();
+        }
+    }
+
+    function wireEventListeners() {
+        wireDialogBackdropClose();
+
+        document.getElementById("navQueueBtn").addEventListener("click", () => {
+            document.getElementById("navQueueBtn").classList.add("active");
+            document.getElementById("navLogsBtn").classList.remove("active");
+            document.getElementById("duplicatesSection").scrollIntoView({ behavior: "smooth" });
+        });
+        document.getElementById("navLogsBtn").addEventListener("click", () => {
+            const logSec = document.getElementById("activityLogSection");
+            const willShow = logSec.style.display === "none";
+            logSec.style.display = willShow ? "block" : "none";
+            document.getElementById("navLogsBtn").classList.toggle("active", willShow);
+            document.getElementById("navQueueBtn").classList.toggle("active", !willShow);
+            if (willShow) {
+                refreshLogs();
+                logSec.scrollIntoView({ behavior: "smooth" });
+            }
+        });
+        document.getElementById("hideLogsBtn").addEventListener("click", () => {
+            document.getElementById("activityLogSection").style.display = "none";
+            document.getElementById("navLogsBtn").classList.remove("active");
+            document.getElementById("navQueueBtn").classList.add("active");
+        });
+        document.getElementById("openLibraryBtn").addEventListener("click", () => openDialog("libraryModal"));
+        document.getElementById("openCollectionsBtn").addEventListener("click", openCollectionsModal);
+        document.getElementById("openJobQueueBtn").addEventListener("click", openJobQueueModal);
+        document.getElementById("jobStatusBadge").addEventListener("click", openJobQueueModal);
+        document.getElementById("refreshJobQueueBtn").addEventListener("click", fetchJobStatusNow);
+        document.getElementById("clearJobHistoryBtn").addEventListener("click", clearCompletedJobs);
+        document.getElementById("openQuarantineBtn").addEventListener("click", openQuarantineModal);
+        document.getElementById("openMaintenanceBtn").addEventListener("click", openMaintenanceModal);
+        document.getElementById("openSettingsBtn").addEventListener("click", () => openDialog("settingsModal"));
+        document.getElementById("openAboutBtn").addEventListener("click", () => openDialog("aboutModal"));
+
+        document.getElementById("refreshQuarantineBtn").addEventListener("click", loadQuarantineStatus);
+        document.getElementById("purgeAllQuarantineBtn").addEventListener("click", () => purgeQuarantine(true));
+        document.getElementById("quarantineList").addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-purge-index]");
+            if (!btn || !lastQuarantineData) return;
+            const idx = parseInt(btn.dataset.purgeIndex, 10);
+            const item = (lastQuarantineData.items || [])[idx];
+            if (item) purgeQuarantine(false, item.path);
+        });
+
+        document.getElementById("refreshCollectionsBtn").addEventListener("click", loadCollectionsOverview);
+        document.getElementById("tabNativeBtn").addEventListener("click", () => switchCollectionsTab("native"));
+        document.getElementById("tabCustomBtn").addEventListener("click", () => switchCollectionsTab("custom"));
+        document.getElementById("collectionsSearchInput").addEventListener("input", renderCollectionsUI);
+        document.getElementById("filterMisplacedBtn").addEventListener("click", () => {
+            filterMisplacedOnly = !filterMisplacedOnly;
+            const btn = document.getElementById("filterMisplacedBtn");
+            btn.setAttribute("aria-pressed", String(filterMisplacedOnly));
+            btn.className = filterMisplacedOnly ? "btn-amber" : "btn-secondary";
+            btn.innerText = filterMisplacedOnly ? "Not in Collection Root Only: ON" : "Not in Collection Root Only: OFF";
+            renderCollectionsUI();
+        });
+        document.getElementById("globalSearchInput").addEventListener("input", () => {
+            renderDuplicates();
+            renderIntakeQueue();
+        });
+        document.getElementById("stagingRootSelect").addEventListener("change", async () => {
+            appConfig.staging_folder = document.getElementById("stagingRootSelect").value;
+            document.getElementById("stagingFolderInput").value = appConfig.staging_folder;
+            await saveSettings();
+            renderIntakeQueue();
+        });
+        document.getElementById("browseStagingBtn").addEventListener("click", () => browseForStagingFolder("browseStagingBtn", "resultsSummary"));
+        document.getElementById("browseLibStagingBtn").addEventListener("click", () => browseForStagingFolder("browseLibStagingBtn", "librarySyncStatus"));
+        document.getElementById("saveStagingFolderBtn").addEventListener("click", async () => {
+            const val = document.getElementById("stagingFolderInput").value.trim();
+            appConfig.staging_folder = val;
+            populateStagingRootSelect(val);
+            await saveSettings();
+            renderIntakeQueue();
+            const st = document.getElementById("librarySyncStatus");
+            st.style.color = "var(--green)";
+            st.innerText = val ? `Default staging folder saved: ${val}` : "Default staging folder cleared.";
+        });
+        document.getElementById("approveAllIntakeBtn").addEventListener("click", approveAllSafeImports);
+        document.getElementById("intakeContainer").addEventListener("click", (e) => {
+            const skipBtn = e.target.closest("[data-skip-intake]");
+            if (skipBtn) {
+                skipIntakeItem(parseInt(skipBtn.dataset.skipIntake, 10));
+                return;
+            }
+            const execBtn = e.target.closest("[data-exec-intake]");
+            if (execBtn) {
+                const idx = parseInt(execBtn.dataset.execIntake, 10);
+                const item = lastIntakeItems[idx];
+                if (!item) return;
+                intakeStates[idx] = "queued";
+                const skipB = document.getElementById(`intake-skip-${idx}`);
+                if (skipB) skipB.disabled = true;
+                enqueueAction(`Intake Import: ${item.title}`, execBtn, () => executeIntakeImport(idx));
+                updateBulkIntakeButtonState();
+            }
+        });
+        document.getElementById("customMovieSearch").addEventListener("input", renderCustomMoviePicker);
+        document.getElementById("resetCustomFormBtn").addEventListener("click", resetCustomCollectionForm);
+        document.getElementById("customCollectionForm").addEventListener("submit", (e) => {
+            e.preventDefault();
+            saveCustomCollectionForm();
+        });
+        document.getElementById("customMoviePicker").addEventListener("change", (e) => {
+            const cb = e.target.closest("[data-pick-tmdb]");
+            if (!cb) return;
+            const tid = cb.dataset.pickTmdb;
+            if (cb.checked) selectedCustomTmdbs.add(tid);
+            else selectedCustomTmdbs.delete(tid);
+            document.getElementById("customSelectedCount").innerText = selectedCustomTmdbs.size;
+        });
+        document.getElementById("customTagPicker").addEventListener("change", (e) => {
+            const cb = e.target.closest("[data-pick-tag]");
+            if (!cb) return;
+            const label = cb.dataset.pickTag;
+            if (cb.checked) selectedCustomTags.add(label);
+            else selectedCustomTags.delete(label);
+            document.getElementById("customTagSelectedCount").innerText = selectedCustomTags.size;
+        });
+        document.getElementById("collectMoviesFromTagsBtn").addEventListener("click", collectMoviesFromSelectedTags);
+        document.getElementById("collectionsModal").addEventListener("click", (e) => {
+            const ignBtn = e.target.closest("[data-ignore-loc]");
+            if (ignBtn) {
+                toggleIgnoreMovieLocation(ignBtn.dataset.ignoreLoc, ignBtn.dataset.ignoreVal === "1", ignBtn.dataset.ignoreTitle || "");
+                return;
+            }
+            const moveBtn = e.target.closest("[data-bulk-move]");
+            if (moveBtn) {
+                const key = moveBtn.dataset.bulkMove;
+                const selId = moveBtn.dataset.selectId;
+                const resolved = getCollectionByKey(key);
+                const label = resolved ? `Bulk Move: ${resolved.entry.name}` : "Collection Bulk Move";
+                enqueueAction(label, moveBtn, () => executeBulkMove(key, selId, moveBtn));
+                return;
+            }
+            const delBtn = e.target.closest("[data-open-bulk-delete]");
+            if (delBtn) {
+                openBulkDeleteConfirm(delBtn.dataset.openBulkDelete);
+                return;
+            }
+            const editBtn = e.target.closest("[data-edit-custom]");
+            if (editBtn) {
+                editCustomCollection(editBtn.dataset.editCustom);
+                return;
+            }
+            const remBtn = e.target.closest("[data-remove-custom-only]");
+            if (remBtn) {
+                removeCustomCollectionOnly(remBtn.dataset.removeCustomOnly);
+                return;
+            }
+            const createRootBtn = e.target.closest("[data-create-custom-root]");
+            if (createRootBtn) {
+                openCreateCustomRootDialog("card", parseInt(createRootBtn.dataset.createCustomRoot, 10));
+            }
+        });
+        document.getElementById("browseCustomCollRootBtn").addEventListener("click", () => browseForPath("folder", "customCollRootFolder", "browseCustomCollRootBtn", "collectionsStatus"));
+        document.getElementById("openCreateFormRootBtn").addEventListener("click", () => openCreateCustomRootDialog("form"));
+        document.getElementById("browseCreateCustomRootParentBtn").addEventListener("click", async () => {
+            await browseForPath("folder", "createCustomRootParent", "browseCreateCustomRootParentBtn", "createCustomRootFeedback");
+            updateCreateCustomRootPreview();
+        });
+        document.getElementById("createCustomRootParent").addEventListener("input", updateCreateCustomRootPreview);
+        document.getElementById("createCustomRootName").addEventListener("input", updateCreateCustomRootPreview);
+        document.getElementById("createCustomRootForm").addEventListener("submit", (e) => {
+            e.preventDefault();
+            submitCreateCustomRootForm();
+        });
+        document.getElementById("collectionsModal").addEventListener("change", (e) => {
+            const sel = e.target.closest("[data-coll-root-select]");
+            if (sel && sel.value) {
+                handleCollectionRootChange(sel.dataset.collRootSelect, sel.value);
+            }
+        });
+        document.getElementById("bulkDeleteForm").addEventListener("submit", (e) => {
+            e.preventDefault();
+            confirmBulkDelete();
+        });
+        document.getElementById("confirmCreateRootBtn").addEventListener("click", confirmCreateRootAndMove);
+
+        document.getElementById("scanBtn").addEventListener("click", runScan);
+        document.getElementById("approveAllBtn").addEventListener("click", approveAllSafe);
+        document.getElementById("trimLogsBtn").addEventListener("click", trimLogsNow);
+
+        document.getElementById("settingsForm").addEventListener("submit", (e) => {
+            e.preventDefault();
+            saveSettings();
+        });
+        document.getElementById("clearApiKeyBtn").addEventListener("click", clearSavedApiKey);
+        document.getElementById("testRadarrBtn").addEventListener("click", testRadarr);
+
+        document.getElementById("syncRadarrBtn").addEventListener("click", syncFromRadarr);
+        document.getElementById("addLibBtn").addEventListener("click", () => addFolder("library_folders", "newLibPath"));
+        document.getElementById("addDlBtn").addEventListener("click", () => addFolder("download_folders", "newDlPath"));
+        document.getElementById("browseDlBtn").addEventListener("click", () => browseForPath("folder", "newDlPath", "browseDlBtn", "librarySyncStatus"));
+
+        document.getElementById("missingFoldersBadge").addEventListener("click", () => {
+            renderMissingFoldersModalList();
+            openDialog("missingFoldersModal");
+        });
+        document.getElementById("missingFoldersList").addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-resolve-missing-idx]");
+            if (!btn) return;
+            const idx = parseInt(btn.dataset.resolveMissingIdx, 10);
+            const item = lastMissingOnlineFolders[idx];
+            if (item) resolveMissingFolderAction(item.path, btn.dataset.resolveAction);
+        });
+        document.getElementById("libraryModal").addEventListener("click", (e) => {
+            const ignBtn = e.target.closest("[data-toggle-ignore-path]");
+            if (ignBtn) {
+                toggleFolderIgnoredState(ignBtn.dataset.toggleIgnorePath, ignBtn.dataset.toggleIgnoreVal === "1");
+                return;
+            }
+            const resBtn = e.target.closest("[data-inline-resolve-path]");
+            if (resBtn) {
+                resolveMissingFolderAction(resBtn.dataset.inlineResolvePath, resBtn.dataset.inlineResolveAction);
+                return;
+            }
+            const btn = e.target.closest("[data-remove-list]");
+            if (btn) {
+                removeFolder(btn.dataset.removeList, parseInt(btn.dataset.removeIndex, 10));
+            }
+        });
+
+        document.getElementById("duplicatesContainer").addEventListener("click", (e) => {
+            const skipBtn = e.target.closest("[data-skip-group]");
+            if (skipBtn) {
+                skipGroup(parseInt(skipBtn.dataset.skipGroup, 10));
+                return;
+            }
+            const execBtn = e.target.closest("[data-exec-group]");
+            if (execBtn) {
+                const idx = parseInt(execBtn.dataset.execGroup, 10);
+                const g = lastScanGroups[idx];
+                if (!g) return;
+                groupStates[idx] = "queued";
+                const skipB = document.getElementById(`skip-btn-${idx}`);
+                if (skipB) skipB.disabled = true;
+                enqueueAction(`Duplicate Swap: ${g.title}`, execBtn, () => executeGroup(idx));
+                updateBulkButtonState();
+            }
+        });
+
+        document.getElementById("refreshDrivesBtn").addEventListener("click", () => loadMaintenanceStatus(true));
+        document.getElementById("maintSchedule").addEventListener("change", updateScheduleFieldVisibility);
+        document.getElementById("browseContigBtn").addEventListener("click", () => browseForPath("contig", "contigPath", "browseContigBtn", "maintFeedback"));
+        document.getElementById("maintenanceForm").addEventListener("submit", (e) => {
+            e.preventDefault();
+            saveMaintenanceSettings();
+        });
+        document.getElementById("maintRunNowBtn").addEventListener("click", runMaintenanceNow);
+        document.getElementById("maintStopBtn").addEventListener("click", stopMaintenanceNow);
+        document.getElementById("maintDriveList").addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-toggle-drive]");
+            if (btn) {
+                setDriveMediaType(btn.dataset.toggleDrive, btn.dataset.nextType);
+            }
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+        wireEventListeners();
+        loadConfig();
+        startSessionHeartbeat();
+    });
+</script>
+</body>
+</html>

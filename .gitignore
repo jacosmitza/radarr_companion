@@ -1,0 +1,44 @@
+# Author: Jaco Smit & Google Gemini
+# Date: 2026-11-25
+# Radarr Companion — Git Ignore Rules
+
+# Local user configuration & secrets (DPAPI-encrypted API keys, personal paths, custom collections)
+config.json
+config.json.tmp
+
+# Runtime activity logs & temporary files
+radarr_companion.log
+radarr_companion.log.tmp
+*.log
+*.rc_tmp
+
+# Local quarantine folders (if accidentally created inside workspace)
+_RadarrCompanion_Quarantine/
+
+# Third-party local tools (user-supplied Sysinternals binaries)
+contig.exe
+contig64.exe
+Contig.exe
+Contig64.exe
+tools/
+
+# Python bytecode, caches, and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# PyInstaller build artifacts (keep dist/RadarrCompanion.exe out of source commits by default;
+# upload compiled executables as GitHub Releases instead)
+build/
+dist/
+*.spec.bak
+
+# Windows & IDE metadata
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
