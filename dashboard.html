@@ -697,7 +697,7 @@
             <span class="brand-logo" aria-hidden="true">R</span>
             <div>
                 <span class="brand-text">Radarr</span>
-                <span class="brand-sub">Companion v1.0</span>
+                <span class="brand-sub">Companion v1.3</span>
             </div>
         </div>
         <nav class="sidebar-nav" aria-label="Primary sections">
@@ -1054,6 +1054,12 @@
         <button type="button" class="btn-secondary" id="filterMisplacedBtn" aria-pressed="false" title="Show only collections and movies that are NOT currently inside the collection's root folder" style="white-space:nowrap;">Not in Collection Root Only: OFF</button>
     </div>
 
+    <div class="input-row" style="margin-bottom:12px;">
+        <input type="text" id="collectionsPresetParentInput" placeholder="Preset parent location for '+ Create Folder' (leave blank to prompt each time, e.g. D:\Media\Collections)" aria-label="Preset parent location for new collection folders">
+        <button type="button" class="btn-secondary btn-sm" id="browseCollectionsPresetBtn">Browse...</button>
+        <button type="button" class="btn-secondary btn-sm" id="saveCollectionsPresetBtn" style="white-space:nowrap;">Save Preset</button>
+    </div>
+
     <!-- Native Collections Panel -->
     <section id="nativeCollectionsPanel" aria-label="Native Radarr collections">
         <div id="nativeCollectionsList"></div>
@@ -1150,37 +1156,46 @@
     </div>
 </dialog>
 
-<!-- 6b. CREATE CUSTOM COLLECTION ROOT FOLDER DIALOG -->
+<!-- 6b. CREATE COLLECTION ROOT FOLDER DIALOG (NATIVE & CUSTOM) -->
 <dialog id="createCustomRootModal" class="app-dialog modal-sm" aria-labelledby="createCustomRootTitle">
     <div class="modal-header">
-        <h3 id="createCustomRootTitle" style="color:var(--accent);">Create Custom Collection Root Folder</h3>
+        <h3 id="createCustomRootTitle" style="color:var(--accent);">Create Collection Folder</h3>
         <button type="button" class="btn-secondary btn-sm" data-close-dialog="createCustomRootModal">Cancel</button>
     </div>
     <p style="font-size:13px; color:var(--muted); margin:0 0 12px 0;">
-        Creates a dedicated folder on disk, registers it as a Radarr Root Folder, adds it to your Library folders, and links it to this Custom Collection.
+        Creates a folder named after this collection under your preset or chosen parent location, registers it as a Radarr Root Folder, adds it to Library folders, and links it to the collection.
     </p>
     <form id="createCustomRootForm">
         <input type="hidden" id="createCustomRootTargetId" value="">
         <input type="hidden" id="createCustomRootTargetName" value="">
         <input type="hidden" id="createCustomRootMode" value="card">
+        <input type="hidden" id="createCustomRootCollType" value="custom">
+        <input type="hidden" id="createCustomRootCollId" value="">
+        <input type="hidden" id="createCustomRootCollKey" value="">
 
-        <label class="field-label" for="createCustomRootParent">Parent Folder / Drive Path</label>
+        <label class="field-label" for="createCustomRootParent">Parent Location (Preset or Prompted)</label>
         <div class="input-row">
-            <input type="text" id="createCustomRootParent" placeholder="e.g. D:\Media" required>
+            <input type="text" id="createCustomRootParent" placeholder="e.g. D:\Media\Collections" required>
             <button type="button" class="btn-secondary btn-sm" id="browseCreateCustomRootParentBtn">Browse...</button>
         </div>
 
         <label class="field-label" for="createCustomRootName">New Collection Folder Name</label>
         <div class="input-row">
-            <input type="text" id="createCustomRootName" placeholder="e.g. Movies - Marvel MCU" required>
+            <input type="text" id="createCustomRootName" placeholder="e.g. John Wick Collection" required>
         </div>
+
+        <label class="check-label" for="createCustomRootSavePreset" style="font-size:12px; color:var(--muted); margin-bottom:10px;">
+            <input type="checkbox" id="createCustomRootSavePreset">
+            <span>Save this parent location as my preset for future collections</span>
+        </label>
 
         <div id="createCustomRootPreview" class="naming-box" style="margin-bottom:12px;"></div>
         <output id="createCustomRootFeedback" class="status-output" style="display:block; margin-bottom:10px;" aria-live="polite"></output>
 
-        <div style="display:flex; justify-content:flex-end; gap:10px; padding-top:12px; border-top:1px solid var(--border);">
+        <div style="display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; padding-top:12px; border-top:1px solid var(--border);">
             <button type="button" class="btn-secondary" data-close-dialog="createCustomRootModal">Cancel</button>
-            <button type="submit" class="btn-green" id="confirmCreateCustomRootBtn">Create &amp; Register Root Folder</button>
+            <button type="submit" class="btn-secondary" id="confirmCreateCustomRootBtn">Create &amp; Set Root</button>
+            <button type="button" class="btn-green" id="confirmCreateAndMoveRootBtn">Create &amp; Move Movies</button>
         </div>
     </form>
 </dialog>
@@ -2821,6 +2836,10 @@
                     : "";
                 statusEl.innerText = `Loaded ${collectionsOverview.native_collections.length} native collection(s), ${collectionsOverview.custom_collections.length} custom collection(s), and ${collectionsOverview.movies.length} library movie(s).${exclTxt}`;
             }
+            const presetInput = document.getElementById("collectionsPresetParentInput");
+            if (presetInput && typeof collectionsOverview.collections_root_parent === "string") {
+                presetInput.value = collectionsOverview.collections_root_parent;
+            }
             renderCollectionsUI();
         } catch (err) {
             statusEl.style.color = "var(--red)";
@@ -2926,7 +2945,7 @@
                     <select id="${selectId}" data-coll-root-select="${type}:${idx}" aria-label="Target root folder for ${escapeHtml(c.name)}">
                         ${buildRootFolderOptionsHtml(c.root_folder || "")}
                     </select>
-                    ${type === "custom" ? `<button type="button" class="btn-amber btn-sm" data-create-custom-root="${idx}" title="Create a new dedicated root folder on disk and register it in Radarr">+ New Root</button>` : ""}
+                    <button type="button" class="btn-amber btn-sm" data-create-coll-root="${type}:${idx}" title="Create a new folder named '${escapeHtml(c.name)}' under your preset or chosen location" style="white-space:nowrap;">+ Create Folder</button>
                     <button type="button" class="btn-green btn-sm" data-bulk-move="${type}:${idx}" data-select-id="${selectId}" ${visibleMovies.length === 0 ? "disabled" : ""}>${moveBtnLabel}</button>
                 </div>
                 ${cardNote ? `<div style="font-size:12px; color:var(--green); margin-bottom:6px;">${escapeHtml(cardNote)}</div>` : ""}
@@ -3182,17 +3201,51 @@
             : "Enter a parent folder and collection folder name above.";
     }
 
-    function openCreateCustomRootDialog(mode, customIdx = null) {
+    async function saveCollectionsPresetParent() {
+        const input = document.getElementById("collectionsPresetParentInput");
+        const statusEl = document.getElementById("collectionsStatus");
+        const parentVal = (input ? input.value : "").trim();
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = "Saving preset parent location...";
+        try {
+            const res = await fetch("/api/collections/set_preset_parent", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ parent_folder: parentVal })
+            });
+            const data = await res.json();
+            statusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+            statusEl.innerText = data.message || "Preset saved.";
+            if (data.ok && collectionsOverview) {
+                collectionsOverview.collections_root_parent = data.collections_root_parent || "";
+            }
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Preset save failed: ${err.message}`;
+        }
+    }
+
+    function openCreateCustomRootDialog(mode, collKey = null) {
+        let collType = "custom";
+        let collId = "";
         let customId = "";
         let collName = "";
-        let defaultParent = "";
+        let presetParent = (document.getElementById("collectionsPresetParentInput").value || "").trim()
+            || (collectionsOverview && collectionsOverview.collections_root_parent ? collectionsOverview.collections_root_parent : "");
+        let defaultParent = presetParent;
 
-        if (mode === "card" && customIdx !== null && collectionsOverview) {
-            const entry = (collectionsOverview.custom_collections || [])[customIdx];
-            if (!entry) return;
-            customId = entry.id || "";
+        if (mode === "card" && collKey) {
+            const resolved = getCollectionByKey(collKey);
+            if (!resolved) return;
+            collType = resolved.type;
+            const entry = resolved.entry;
             collName = entry.name || "";
-            if (entry.root_folder) {
+            if (collType === "native") {
+                collId = entry.id !== null && entry.id !== undefined ? String(entry.id) : "";
+            } else {
+                customId = entry.id || "";
+            }
+            if (!defaultParent && entry.root_folder) {
                 const parts = entry.root_folder.replace(/[\\/]+$/, "").split(/[\\/]/);
                 if (parts.length > 1) {
                     parts.pop();
@@ -3203,7 +3256,7 @@
             customId = (document.getElementById("customCollId").value || "").trim();
             collName = (document.getElementById("customCollName").value || "").trim();
             const curVal = (document.getElementById("customCollRootFolder").value || "").trim();
-            if (curVal) defaultParent = curVal;
+            if (!defaultParent && curVal) defaultParent = curVal;
         }
 
         if (!defaultParent) {
@@ -3220,53 +3273,71 @@
         }
 
         document.getElementById("createCustomRootMode").value = mode;
+        document.getElementById("createCustomRootCollType").value = collType;
+        document.getElementById("createCustomRootCollId").value = collId;
         document.getElementById("createCustomRootTargetId").value = customId;
-        document.getElementById("createCustomRootTargetName").value = collName || "Custom Collection";
+        document.getElementById("createCustomRootTargetName").value = collName || "Collection";
+        document.getElementById("createCustomRootCollKey").value = collKey || "";
         document.getElementById("createCustomRootParent").value = defaultParent;
         document.getElementById("createCustomRootName").value = collName;
+        document.getElementById("createCustomRootSavePreset").checked = !presetParent;
+        document.getElementById("confirmCreateAndMoveRootBtn").style.display = (mode === "card") ? "inline-block" : "none";
         document.getElementById("createCustomRootFeedback").innerText = "";
         updateCreateCustomRootPreview();
         openModal("createCustomRootModal");
     }
 
-    async function submitCreateCustomRootForm() {
+    async function submitCreateCustomRootForm(alsoMove = false) {
         const fb = document.getElementById("createCustomRootFeedback");
         const statusEl = document.getElementById("collectionsStatus");
         const mode = document.getElementById("createCustomRootMode").value;
+        const collType = document.getElementById("createCustomRootCollType").value || "custom";
+        const collIdRaw = document.getElementById("createCustomRootCollId").value.trim();
         const customId = document.getElementById("createCustomRootTargetId").value.trim();
         const collName = document.getElementById("createCustomRootTargetName").value.trim();
+        const collKey = document.getElementById("createCustomRootCollKey").value.trim();
         const parentFolder = document.getElementById("createCustomRootParent").value.trim();
         const folderName = document.getElementById("createCustomRootName").value.trim();
+        const saveAsPreset = document.getElementById("createCustomRootSavePreset").checked;
         const btn = document.getElementById("confirmCreateCustomRootBtn");
+        const moveNowBtn = document.getElementById("confirmCreateAndMoveRootBtn");
 
         if (!parentFolder || !folderName) {
             fb.style.color = "var(--red)";
-            fb.innerText = "Both parent folder and new folder name are required.";
+            fb.innerText = "Both parent location and new collection folder name are required.";
             return;
         }
 
         btn.disabled = true;
+        moveNowBtn.disabled = true;
         fb.style.color = "var(--accent)";
-        fb.innerText = "Creating folder on disk and registering in Radarr...";
+        fb.innerText = "Creating collection folder on disk and registering in Radarr...";
         try {
-            const res = await fetch("/api/collections/custom/create_root", {
+            const res = await fetch("/api/collections/create_root", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     parent_folder: parentFolder,
                     folder_name: folderName,
+                    collection_type: collType,
+                    collection_id: collIdRaw ? parseInt(collIdRaw, 10) : null,
                     custom_id: mode === "card" ? customId : "",
-                    collection_name: collName || folderName
+                    collection_name: collName || folderName,
+                    save_as_preset: saveAsPreset
                 })
             });
             const data = await res.json();
             if (!data.ok) {
                 fb.style.color = "var(--red)";
-                fb.innerText = data.message || "Failed to create custom root folder.";
+                fb.innerText = data.message || "Failed to create collection root folder.";
                 return;
             }
-            if (data.detail && data.detail.path && mode === "form") {
-                document.getElementById("customCollRootFolder").value = data.detail.path;
+            const createdPath = data.detail && data.detail.path ? data.detail.path : "";
+            if (createdPath && mode === "form") {
+                document.getElementById("customCollRootFolder").value = createdPath;
+            }
+            if (saveAsPreset && parentFolder) {
+                document.getElementById("collectionsPresetParentInput").value = parentFolder;
             }
             if (data.overview) {
                 collectionsOverview = data.overview;
@@ -3279,12 +3350,27 @@
             closeModal("createCustomRootModal");
             statusEl.style.color = "var(--green)";
             statusEl.innerText = data.message;
+            if (collKey) {
+                collectionRootNotes[collKey] = data.message;
+            }
             renderCollectionsUI();
+
+            if (alsoMove && mode === "card" && collKey && createdPath) {
+                const [t, idxStr] = collKey.split(":");
+                const selId = `coll-root-${t}-${idxStr}`;
+                const selEl = document.getElementById(selId);
+                if (selEl) {
+                    selEl.value = createdPath;
+                }
+                const cardMoveBtn = document.querySelector(`[data-bulk-move="${collKey}"]`);
+                enqueueAction(`Bulk Move: ${collName || folderName}`, cardMoveBtn, () => executeBulkMove(collKey, selId, cardMoveBtn, true));
+            }
         } catch (err) {
             fb.style.color = "var(--red)";
             fb.innerText = `Create failed: ${err.message}`;
         } finally {
             btn.disabled = false;
+            moveNowBtn.disabled = false;
             refreshLogs();
         }
     }
@@ -3726,11 +3812,13 @@
                 removeCustomCollectionOnly(remBtn.dataset.removeCustomOnly);
                 return;
             }
-            const createRootBtn = e.target.closest("[data-create-custom-root]");
+            const createRootBtn = e.target.closest("[data-create-coll-root]");
             if (createRootBtn) {
-                openCreateCustomRootDialog("card", parseInt(createRootBtn.dataset.createCustomRoot, 10));
+                openCreateCustomRootDialog("card", createRootBtn.dataset.createCollRoot);
             }
         });
+        document.getElementById("browseCollectionsPresetBtn").addEventListener("click", () => browseForPath("folder", "collectionsPresetParentInput", "browseCollectionsPresetBtn", "collectionsStatus"));
+        document.getElementById("saveCollectionsPresetBtn").addEventListener("click", saveCollectionsPresetParent);
         document.getElementById("browseCustomCollRootBtn").addEventListener("click", () => browseForPath("folder", "customCollRootFolder", "browseCustomCollRootBtn", "collectionsStatus"));
         document.getElementById("openCreateFormRootBtn").addEventListener("click", () => openCreateCustomRootDialog("form"));
         document.getElementById("browseCreateCustomRootParentBtn").addEventListener("click", async () => {
@@ -3741,8 +3829,9 @@
         document.getElementById("createCustomRootName").addEventListener("input", updateCreateCustomRootPreview);
         document.getElementById("createCustomRootForm").addEventListener("submit", (e) => {
             e.preventDefault();
-            submitCreateCustomRootForm();
+            submitCreateCustomRootForm(false);
         });
+        document.getElementById("confirmCreateAndMoveRootBtn").addEventListener("click", () => submitCreateCustomRootForm(true));
         document.getElementById("collectionsModal").addEventListener("change", (e) => {
             const sel = e.target.closest("[data-coll-root-select]");
             if (sel && sel.value) {

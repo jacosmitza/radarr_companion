@@ -117,6 +117,7 @@ DEFAULT_CONFIG = {
     "maintenance_last_run": "",
     "custom_collections": [],  # [{"id": "mcu", "name": "Marvel MCU Movies", "tmdb_ids": [...], "radarr_tags": [...], "root_folder": ""}]
     "collection_location_ignores": [],  # ["native:123:456", "custom:mcu:1726"] movies ignored for misplaced checks
+    "collections_root_parent": "",  # Optional preset parent folder where new collection root folders are created
     "ignored_missing_folders": [],  # Configured folders deleted on an online drive that user chose to ignore
     "ignored_folders": []  # Configured folders selectively ignored by the user (e.g. Waiting For / zz Missing)
 }
@@ -129,6 +130,52 @@ LOG_LINE_REGEX = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] \[([A-Z
 JOB_LOCK = threading.Lock()
 JOB_SEQ = 0
 JOB_HISTORY = []  # Most recent first, capped at 100 entries
+ACTIVE_TRANSFER_LOCK = threading.Lock()
+ACTIVE_TRANSFER_PATHS = {}  # normcase(abspath) -> refcount of active moves/copies
+
+
+class _ActiveTransferTracker:
+    """Context manager registering source & destination paths while a move/copy is in flight."""
+    def __init__(self, paths):
+        self._keys = [
+            os.path.normcase(os.path.abspath(str(p)))
+            for p in paths
+            if p and str(p).strip()
+        ]
+
+    def __enter__(self):
+        with ACTIVE_TRANSFER_LOCK:
+            for k in self._keys:
+                ACTIVE_TRANSFER_PATHS[k] = ACTIVE_TRANSFER_PATHS.get(k, 0) + 1
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        with ACTIVE_TRANSFER_LOCK:
+            for k in self._keys:
+                cnt = ACTIVE_TRANSFER_PATHS.get(k, 0) - 1
+                if cnt <= 0:
+                    ACTIVE_TRANSFER_PATHS.pop(k, None)
+                else:
+                    ACTIVE_TRANSFER_PATHS[k] = cnt
+        return False
+
+
+def track_active_transfer(*paths):
+    """Tracks one or more file/folder paths as actively being moved so scans exclude them."""
+    return _ActiveTransferTracker(paths)
+
+
+def is_path_in_active_transfer(path):
+    """Returns True if path matches or lies inside any folder/file currently being moved."""
+    if not path:
+        return False
+    norm_p = os.path.normcase(os.path.abspath(str(path)))
+    with ACTIVE_TRANSFER_LOCK:
+        active_keys = list(ACTIVE_TRANSFER_PATHS.keys())
+    for k in active_keys:
+        if norm_p == k or norm_p.startswith(k + os.sep):
+            return True
+    return False
 JOB_STATE = {
     "active": False,
     "job_id": None,
@@ -611,6 +658,8 @@ def load_config():
             merged.update(normalise_maintenance_config(merged))
             merged["custom_collections"] = normalise_custom_collections(merged.get("custom_collections", []))
             merged["collection_location_ignores"] = normalise_collection_ignores(merged.get("collection_location_ignores", []))
+            raw_coll_parent = str(merged.get("collections_root_parent") or "").strip()
+            merged["collections_root_parent"] = os.path.normpath(raw_coll_parent) if raw_coll_parent else ""
             merged["ignored_missing_folders"] = [
                 os.path.normpath(str(p).strip())
                 for p in (merged.get("ignored_missing_folders") or [])
@@ -683,6 +732,7 @@ def save_config(cfg):
         "maintenance_last_run": maint["maintenance_last_run"],
         "custom_collections": normalise_custom_collections(cfg.get("custom_collections", [])),
         "collection_location_ignores": normalise_collection_ignores(cfg.get("collection_location_ignores", [])),
+        "collections_root_parent": os.path.normpath(str(cfg.get("collections_root_parent") or "").strip()) if str(cfg.get("collections_root_parent") or "").strip() else "",
         "ignored_missing_folders": [
             os.path.normpath(str(p).strip())
             for p in (cfg.get("ignored_missing_folders") or [])
@@ -1623,6 +1673,7 @@ def scan_all_drives(cfg):
     grouped = defaultdict(list)
     seen_paths = set()
     scanned_files = 0
+    skipped_active_transfers = 0
     offline_roots = []
 
     sources = [
@@ -1667,6 +1718,11 @@ def scan_all_drives(cfg):
                         continue
                     seen_paths.add(norm_key)
 
+                    # Exclude files currently being moved/copied so in-flight transfers are never flagged as duplicates
+                    if is_path_in_active_transfer(full_path) or os.path.exists(win_long_path(full_path + ".rc_tmp")):
+                        skipped_active_transfers += 1
+                        continue
+
                     try:
                         fsize = os.path.getsize(win_long_path(full_path))
                     except OSError:
@@ -1691,6 +1747,9 @@ def scan_all_drives(cfg):
                         "radarr_movie_id": (movie_meta or {}).get("radarr_id"),
                         "match_source": match_source
                     })
+
+    if skipped_active_transfers > 0:
+        log_event(f"Excluded {skipped_active_transfers} file(s) currently being moved from duplicate detection.", "INFO")
 
     duplicate_groups = []
     intake_candidates = []
@@ -1894,26 +1953,27 @@ def find_matching_subtitles(video_path):
 
 def _move_file_safely_cross_drive(src_path, dst_path):
     """Moves a single file safely: instant move on same drive, size-verified copy+replace across drives."""
-    same_drv = is_same_drive(src_path, dst_path)
-    os.makedirs(win_long_path(os.path.dirname(dst_path)), exist_ok=True)
-    if same_drv:
-        shutil.move(win_long_path(src_path), win_long_path(dst_path))
-        return
+    with track_active_transfer(src_path, dst_path):
+        same_drv = is_same_drive(src_path, dst_path)
+        os.makedirs(win_long_path(os.path.dirname(dst_path)), exist_ok=True)
+        if same_drv:
+            shutil.move(win_long_path(src_path), win_long_path(dst_path))
+            return
 
-    src_size = os.path.getsize(win_long_path(src_path))
-    usage = shutil.disk_usage(os.path.dirname(dst_path))
-    if usage.free < (src_size + CROSS_DRIVE_FREE_BUFFER_BYTES):
-        need_gb = round((src_size + CROSS_DRIVE_FREE_BUFFER_BYTES) / (1024 ** 3), 2)
-        have_gb = round(usage.free / (1024 ** 3), 2)
-        raise OSError(f"Insufficient free space on {get_drive_label(dst_path)} (Need {need_gb} GB, Free {have_gb} GB).")
+        src_size = os.path.getsize(win_long_path(src_path))
+        usage = shutil.disk_usage(os.path.dirname(dst_path))
+        if usage.free < (src_size + CROSS_DRIVE_FREE_BUFFER_BYTES):
+            need_gb = round((src_size + CROSS_DRIVE_FREE_BUFFER_BYTES) / (1024 ** 3), 2)
+            have_gb = round(usage.free / (1024 ** 3), 2)
+            raise OSError(f"Insufficient free space on {get_drive_label(dst_path)} (Need {need_gb} GB, Free {have_gb} GB).")
 
-    tmp_dst = dst_path + ".rc_tmp"
-    copy_file_with_progress(src_path, tmp_dst, label=os.path.basename(src_path))
-    if os.path.getsize(win_long_path(tmp_dst)) != src_size:
-        os.remove(win_long_path(tmp_dst))
-        raise OSError(f"Cross-drive size verification failed for {os.path.basename(src_path)}.")
-    os.replace(win_long_path(tmp_dst), win_long_path(dst_path))
-    os.remove(win_long_path(src_path))
+        tmp_dst = dst_path + ".rc_tmp"
+        copy_file_with_progress(src_path, tmp_dst, label=os.path.basename(src_path))
+        if os.path.getsize(win_long_path(tmp_dst)) != src_size:
+            os.remove(win_long_path(tmp_dst))
+            raise OSError(f"Cross-drive size verification failed for {os.path.basename(src_path)}.")
+        os.replace(win_long_path(tmp_dst), win_long_path(dst_path))
+        os.remove(win_long_path(src_path))
 
 
 def _cleanup_intake_clutter_after_import(source_folder, cfg):
@@ -2707,7 +2767,8 @@ def fetch_collections_overview(cfg):
             "movies": all_movies_summary,
             "native_collections": native_out,
             "custom_collections": custom_out,
-            "excluded_custom_count": excluded_custom_movie_hits
+            "excluded_custom_count": excluded_custom_movie_hits,
+            "collections_root_parent": str(cfg.get("collections_root_parent") or "").strip()
         })
         return result
     except Exception as exc:
@@ -2884,13 +2945,14 @@ def _move_directory_with_external_command(src_dir, dst_dir, overall_index=None, 
             "/NP"        # No erratic stdout percentage spam
         ]
         try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=7200,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            )
+            with track_active_transfer(src_abs, dst_abs):
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=7200,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                )
         finally:
             stop_monitor.set()
             mon_thread.join(timeout=1.5)
@@ -2910,7 +2972,8 @@ def _move_directory_with_external_command(src_dir, dst_dir, overall_index=None, 
                 pass
         return
 
-    _move_directory_safely(src_abs, dst_abs)
+    with track_active_transfer(src_abs, dst_abs):
+        _move_directory_safely(src_abs, dst_abs)
 
 
 def _move_directory_safely(src_dir, dst_dir):
@@ -3370,15 +3433,19 @@ def set_collection_root_folder(payload, cfg):
 
 def create_custom_collection_root_folder(payload, cfg):
     """
-    Creates a dedicated root folder on disk for a Custom Collection, registers it in Radarr
-    (/api/v3/rootfolder) if connected, adds it to local library_folders in config.json, and
-    optionally assigns it as the custom collection's root_folder.
+    Creates a dedicated root folder on disk for any Native or Custom Collection, registers it
+    in Radarr (/api/v3/rootfolder) if connected, adds it to local library_folders in config.json,
+    optionally saves the parent folder as the preset collections_root_parent, and assigns the
+    new folder as the collection's root folder.
     """
     raw_full = str(payload.get("folder_path") or "").strip()
     parent_folder = str(payload.get("parent_folder") or "").strip()
     folder_name = sanitise_windows_filename(str(payload.get("folder_name") or "").strip())
+    coll_type = str(payload.get("collection_type") or "custom").strip().lower()
+    coll_id = payload.get("collection_id")
     custom_id = str(payload.get("custom_id") or "").strip().lower()
-    collection_name = str(payload.get("collection_name") or folder_name or "Custom Collection").strip()
+    collection_name = str(payload.get("collection_name") or folder_name or "Collection").strip()
+    save_as_preset = bool(payload.get("save_as_preset", False))
 
     if raw_full:
         target_path = os.path.normpath(raw_full)
@@ -3390,7 +3457,7 @@ def create_custom_collection_root_folder(payload, cfg):
     if not is_drive_mounted(target_path):
         return False, f"Cannot create folder: drive {get_drive_label(target_path)} is offline or disconnected.", {}
 
-    jid = begin_job(f"Create Custom Root: {collection_name}", f"Creating root folder {target_path}...", total=1)
+    jid = begin_job(f"Create Collection Root: {collection_name}", f"Creating root folder {target_path}...", total=1)
     try:
         os.makedirs(win_long_path(target_path), exist_ok=True)
     except OSError as exc:
@@ -3418,7 +3485,7 @@ def create_custom_collection_root_folder(payload, cfg):
                 radarr_note = "registered as Radarr root folder"
         except Exception as exc:
             radarr_note = f"Radarr root registration skipped ({exc})"
-            log_event(f"Custom root created on disk, but Radarr root registration failed: {exc}", "WARN")
+            log_event(f"Collection root created on disk, but Radarr root registration failed: {exc}", "WARN")
 
     # Add to local library_folders in config.json if not already present
     norm_target = os.path.normcase(os.path.abspath(target_path))
@@ -3429,9 +3496,25 @@ def create_custom_collection_root_folder(payload, cfg):
         cfg["library_folders"] = sort_paths_by_drive_and_path(lib_folders)
         library_added = True
 
-    # Assign directly to the custom collection if custom_id was supplied
+    # Optionally save parent folder as the preset location for future collections
+    preset_saved = False
+    if save_as_preset and parent_folder:
+        cfg["collections_root_parent"] = os.path.normpath(parent_folder)
+        preset_saved = True
+
+    # Assign directly to the collection (native in Radarr OR custom in config.json)
     assigned_collection = False
-    if custom_id:
+    if coll_type == "native" and coll_id is not None and str(coll_id).isdigit():
+        if cfg.get("radarr_url") and cfg.get("radarr_api_key"):
+            try:
+                _, coll_obj = radarr_api_request(cfg, f"/api/v3/collection/{int(coll_id)}", method="GET", timeout=8)
+                if isinstance(coll_obj, dict) and coll_obj.get("id") is not None:
+                    coll_obj["rootFolderPath"] = target_path
+                    radarr_api_request(cfg, f"/api/v3/collection/{int(coll_id)}", method="PUT", payload=coll_obj, timeout=10)
+                    assigned_collection = True
+            except Exception as exc:
+                log_event(f"Could not update native Radarr collection root for '{collection_name}': {exc}", "WARN")
+    elif custom_id:
         customs = normalise_custom_collections(cfg.get("custom_collections", []))
         for c in customs:
             if c["id"] == custom_id:
@@ -3441,13 +3524,15 @@ def create_custom_collection_root_folder(payload, cfg):
         cfg["custom_collections"] = customs
 
     save_config(cfg)
-    details = [f"Created custom root folder: {target_path}"]
+    details = [f"Created collection root folder: {target_path}"]
     if radarr_note:
         details.append(radarr_note)
     if library_added:
         details.append("added to Library folders")
     if assigned_collection:
         details.append(f"assigned to '{collection_name}'")
+    if preset_saved:
+        details.append("saved preset parent")
     msg = " — ".join(details) + "."
     finish_job(jid, msg, state="completed")
     log_event(f"Collections: {msg}", "INFO")
@@ -3455,7 +3540,8 @@ def create_custom_collection_root_folder(payload, cfg):
         "path": target_path,
         "radarr_registered": radarr_registered,
         "library_added": library_added,
-        "assigned_collection": assigned_collection
+        "assigned_collection": assigned_collection,
+        "preset_saved": preset_saved
     }
 
 
@@ -4535,7 +4621,7 @@ class CompanionHandler(BaseHTTPRequestHandler):
             }, status=200 if ok else 400)
             return
 
-        if self.path == "/api/collections/custom/create_root":
+        if self.path in ("/api/collections/custom/create_root", "/api/collections/create_root"):
             cfg = load_config()
             payload = self._read_json()
             ok, msg, detail = create_custom_collection_root_folder(payload, cfg)
@@ -4547,6 +4633,25 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 "overview": fetch_collections_overview(updated_cfg) if ok else None,
                 "folder_status": get_folder_statuses(updated_cfg) if ok else None
             }, status=200 if ok else 400)
+            return
+
+        if self.path == "/api/collections/set_preset_parent":
+            cfg = load_config()
+            payload = self._read_json()
+            raw_parent = str(payload.get("parent_folder") or "").strip()
+            cfg["collections_root_parent"] = os.path.normpath(raw_parent) if raw_parent else ""
+            saved = save_config(cfg)
+            msg = (
+                f"Saved preset Collections parent folder: {saved['collections_root_parent']}"
+                if saved["collections_root_parent"]
+                else "Cleared preset Collections parent folder (will prompt each time)."
+            )
+            log_event(f"Collections: {msg}", "INFO")
+            self._send_json({
+                "ok": True,
+                "message": msg,
+                "collections_root_parent": saved["collections_root_parent"]
+            })
             return
 
         if self.path == "/api/quarantine/purge":
@@ -4595,8 +4700,38 @@ class CompanionHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/shutdown":
-            log_event("Graceful shutdown requested by a newer Radarr Companion session.", "WARN")
-            self._send_json({"ok": True, "pid": os.getpid(), "message": "Shutting down old session."})
+            payload = self._read_json()
+            force_close = bool(payload.get("force", False))
+            with JOB_LOCK:
+                snap = dict(JOB_STATE)
+                hist_copy = list(JOB_HISTORY)
+            maint_running = bool(MAINTENANCE_STATE.get("running"))
+            has_running_job = bool(snap.get("active")) or any(
+                j.get("state") == "running" for j in hist_copy
+            ) or maint_running
+
+            if has_running_job and not force_close:
+                active_name = snap.get("job_name") or ("Library Maintenance (HDD Defrag)" if maint_running else "Active Job")
+                active_status = snap.get("status") or ("Running scheduled HDD defrag..." if maint_running else "Job in progress...")
+                active_pct = int(snap.get("overall_percent") or 0)
+                log_event(
+                    f"Shutdown guarded: refused graceful shutdown while '{active_name}' ({active_pct}%) is running.",
+                    "WARN"
+                )
+                self._send_json({
+                    "ok": False,
+                    "busy": True,
+                    "pid": os.getpid(),
+                    "job_name": active_name,
+                    "status": active_status,
+                    "overall_percent": active_pct,
+                    "message": f"Shutdown refused: '{active_name}' ({active_pct}%) is currently running."
+                }, status=409)
+                return
+
+            mode_note = "FORCE shutdown" if force_close else "Graceful shutdown"
+            log_event(f"{mode_note} requested by a newer Radarr Companion session.", "WARN")
+            self._send_json({"ok": True, "pid": os.getpid(), "message": f"{mode_note} accepted."})
             if ACTIVE_HTTP_SERVER is not None:
                 threading.Thread(target=ACTIVE_HTTP_SERVER.shutdown, daemon=True).start()
             return
@@ -4679,16 +4814,160 @@ def find_existing_companion_pids():
     return sorted(set(pids))
 
 
-def terminate_old_companion_sessions(dashboard_url):
+def probe_existing_instance_active_job(base_url):
     """
-    Checks for an existing Radarr Companion session (by port probe and Windows process list),
-    logs a clear warning, requests graceful shutdown, and forcefully kills any lingering old PIDs.
-    Returns the count of terminated old sessions.
+    Queries an existing Radarr Companion instance's /api/job_status to determine if any
+    file move, import, scan, or maintenance job is currently running.
+    Returns a dict with job details if busy, or None if idle/unreachable.
+    """
+    try:
+        req = urllib.request.Request(f"{base_url}/api/job_status", method="GET")
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            if resp.getcode() == 200:
+                data = json.loads(resp.read().decode("utf-8") or "{}")
+                running_hist = [j for j in (data.get("history") or []) if j.get("state") == "running"]
+                if data.get("active") or running_hist:
+                    return {
+                        "job_name": data.get("job_name") or (running_hist[0].get("name") if running_hist else "Active Job"),
+                        "status": data.get("status") or (running_hist[0].get("status") if running_hist else "Operation in progress"),
+                        "overall_percent": int(data.get("overall_percent") or 0),
+                        "current_file": data.get("current_file") or ""
+                    }
+    except Exception:
+        pass
+    return None
+
+
+def prompt_running_jobs_action(job_info):
+    """
+    Warns the user that an existing Radarr Companion instance has active running job(s)
+    and asks whether to 'wait' (recommended), 'force' close, or 'cancel' (keep existing).
+    Uses a native Windows MessageBox when no interactive console TTY is attached.
+    """
+    job_name = job_info.get("job_name") or "Active Job"
+    job_status = job_info.get("status") or "Operation in progress"
+    pct = job_info.get("overall_percent", 0)
+    cur_file = job_info.get("current_file") or ""
+
+    detail_lines = [
+        "An existing Radarr Companion instance is currently running a job:",
+        f"  Job: {job_name} ({pct}%)",
+        f"  Status: {job_status}",
+    ]
+    if cur_file:
+        detail_lines.append(f"  Current File: {cur_file}")
+    detail_lines.append("")
+    detail_lines.append("Force-closing while a file move, import, or defrag is running can cause partial copies or file corruption.")
+
+    # Use interactive console prompt if attached to a terminal
+    if sys.stdin is not None and sys.stdin.isatty():
+        print("\n" + "=" * 72)
+        print("[!] ACTIVE JOB GUARD — EXISTING INSTANCE IS BUSY")
+        for line in detail_lines:
+            print(line)
+        print("=" * 72)
+        while True:
+            try:
+                ans = input("Choose action — [W]ait for completion (Recommended) / [F]orce close / [C]ancel: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return "cancel"
+            if ans in ("", "w", "wait", "y", "yes"):
+                return "wait"
+            if ans in ("f", "force", "kill"):
+                return "force"
+            if ans in ("c", "cancel", "q", "quit", "n", "no"):
+                return "cancel"
+            print("Please enter W (Wait), F (Force close), or C (Cancel).")
+
+    # Native Windows MessageBox (Yes = Wait, No = Force Close, Cancel = Keep Existing)
+    if os.name == "nt":
+        try:
+            MB_YESNOCANCEL = 0x00000003
+            MB_ICONWARNING = 0x00000030
+            MB_DEFBUTTON1 = 0x00000000
+            MB_TOPMOST = 0x00040000
+            IDYES = 6
+            IDNO = 7
+            msg_text = (
+                "\n".join(detail_lines)
+                + "\n\nClick YES to Wait safely until the job finishes (Recommended)."
+                + "\nClick NO to Force Close the running instance anyway."
+                + "\nClick CANCEL to keep the existing instance running."
+            )
+            res = ctypes.windll.user32.MessageBoxW(
+                None,
+                msg_text,
+                "Radarr Companion — Running Job Protection",
+                MB_YESNOCANCEL | MB_ICONWARNING | MB_DEFBUTTON1 | MB_TOPMOST
+            )
+            if res == IDYES:
+                return "wait"
+            if res == IDNO:
+                return "force"
+            return "cancel"
+        except Exception:
+            pass
+
+    return "cancel"
+
+
+def wait_for_existing_jobs_to_finish(base_url, poll_interval=2.0):
+    """Polls an existing instance until its running jobs finish cleanly."""
+    log_event("Waiting for existing Radarr Companion instance to finish active job(s)...", "INFO")
+    print("[*] Waiting for existing Radarr Companion job(s) to finish safely (press Ctrl+C to cancel)...")
+    last_printed = ""
+    try:
+        while True:
+            if not is_port_in_use(HTTP_HOST, HTTP_PORT):
+                return True
+            active = probe_existing_instance_active_job(base_url)
+            if not active:
+                print("[*] Existing job(s) finished cleanly. Switching to new session...")
+                log_event("Existing Radarr Companion job(s) completed; proceeding with graceful handover.", "INFO")
+                return True
+            status_line = f"    Waiting: {active['job_name']} ({active['overall_percent']}%) — {active['status']}"
+            if status_line != last_printed:
+                print(status_line)
+                last_printed = status_line
+            time.sleep(poll_interval)
+    except KeyboardInterrupt:
+        log_event("User cancelled waiting for existing Radarr Companion job(s).", "INFO")
+        return False
+
+
+def terminate_old_companion_sessions(dashboard_url, prompt_fn=None):
+    """
+    Checks for an existing Radarr Companion session (by port probe and Windows process list).
+    If the existing session has active running jobs, guards against corruption by prompting
+    the user to Wait (recommended), Force Close, or Cancel (keep existing).
+    Returns (terminated_count, aborted_by_user).
     """
     terminated = 0
     old_pids = find_existing_companion_pids()
     port_busy = is_port_in_use(HTTP_HOST, HTTP_PORT)
     is_companion_on_port = is_existing_companion_instance(dashboard_url) if port_busy else False
+    force_shutdown = False
+
+    if is_companion_on_port:
+        active_job = probe_existing_instance_active_job(dashboard_url)
+        if active_job:
+            chooser = prompt_fn or prompt_running_jobs_action
+            choice = str(chooser(active_job) or "cancel").strip().lower()
+            if choice == "wait":
+                if not wait_for_existing_jobs_to_finish(dashboard_url):
+                    return 0, True
+            elif choice == "force":
+                force_shutdown = True
+                log_event(
+                    f"User chose FORCE CLOSE while '{active_job['job_name']}' ({active_job['overall_percent']}%) was running.",
+                    "WARN"
+                )
+            else:
+                log_event(
+                    f"User chose to keep existing Radarr Companion session running ('{active_job['job_name']}' active).",
+                    "INFO"
+                )
+                return 0, True
 
     if is_companion_on_port or old_pids:
         warn_msg = (
@@ -4701,12 +4980,46 @@ def terminate_old_companion_sessions(dashboard_url):
     # 1. Try graceful HTTP shutdown first if a companion server is responding on our port
     if is_companion_on_port:
         try:
-            req = urllib.request.Request(f"{dashboard_url}/api/shutdown", data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+            payload_bytes = json.dumps({"force": force_shutdown}).encode("utf-8")
+            req = urllib.request.Request(
+                f"{dashboard_url}/api/shutdown",
+                data=payload_bytes,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
             with urllib.request.urlopen(req, timeout=2.5) as resp:
                 body = json.loads(resp.read().decode("utf-8") or "{}")
                 if body.get("pid") and body["pid"] not in old_pids and body["pid"] != os.getpid():
                     old_pids.append(int(body["pid"]))
             terminated += 1
+        except urllib.error.HTTPError as exc:
+            if exc.code == 409 and not force_shutdown:
+                # A job started in the tiny race window between probe and shutdown — re-guard safely
+                try:
+                    busy_info = json.loads(exc.read().decode("utf-8") or "{}")
+                except Exception:
+                    busy_info = {"job_name": "Active Job", "status": "Operation in progress", "overall_percent": 0}
+                chooser = prompt_fn or prompt_running_jobs_action
+                choice = str(chooser(busy_info) or "cancel").strip().lower()
+                if choice == "wait":
+                    if not wait_for_existing_jobs_to_finish(dashboard_url):
+                        return 0, True
+                    return terminate_old_companion_sessions(dashboard_url, prompt_fn=prompt_fn)
+                if choice == "force":
+                    force_shutdown = True
+                    try:
+                        req_f = urllib.request.Request(
+                            f"{dashboard_url}/api/shutdown",
+                            data=b'{"force": true}',
+                            headers={"Content-Type": "application/json"},
+                            method="POST"
+                        )
+                        with urllib.request.urlopen(req_f, timeout=2.5):
+                            terminated += 1
+                    except Exception:
+                        pass
+                else:
+                    return 0, True
         except Exception:
             pass
         # Wait briefly for graceful port release
@@ -4740,7 +5053,7 @@ def terminate_old_companion_sessions(dashboard_url):
             if not is_port_in_use(HTTP_HOST, HTTP_PORT):
                 break
             time.sleep(0.2)
-    return terminated
+    return terminated, False
 
 
 if __name__ == "__main__":
@@ -4752,8 +5065,13 @@ if __name__ == "__main__":
     removed_old, _ = trim_log_file(startup_cfg.get("log_retention_days", 30))
     dashboard_url = f"http://{HTTP_HOST}:{HTTP_PORT}"
 
-    # Detect, warn, and terminate any existing Radarr Companion session before binding port 8085
-    replaced_count = terminate_old_companion_sessions(dashboard_url)
+    # Detect, guard active jobs (Wait / Force Close / Cancel), and replace idle old sessions before binding port 8085
+    replaced_count, aborted_by_user = terminate_old_companion_sessions(dashboard_url)
+    if aborted_by_user:
+        print(f"[*] Keeping existing Radarr Companion session running at {dashboard_url}.")
+        if "--no-browser" not in sys.argv:
+            open_dashboard_browser(dashboard_url)
+        sys.exit(0)
 
     if is_port_in_use(HTTP_HOST, HTTP_PORT):
         log_event(
