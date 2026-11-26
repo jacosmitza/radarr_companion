@@ -697,7 +697,7 @@
             <span class="brand-logo" aria-hidden="true">R</span>
             <div>
                 <span class="brand-text">Radarr</span>
-                <span class="brand-sub">Companion v1.3</span>
+                <span class="brand-sub">Companion v1.5</span>
             </div>
         </div>
         <nav class="sidebar-nav" aria-label="Primary sections">
@@ -1198,6 +1198,34 @@
             <button type="button" class="btn-green" id="confirmCreateAndMoveRootBtn">Create &amp; Move Movies</button>
         </div>
     </form>
+</dialog>
+
+<!-- 6c. IN-APP FOLDER & FILE BROWSER DIALOG -->
+<dialog id="pathBrowserModal" class="app-dialog" aria-labelledby="pathBrowserTitle">
+    <div class="modal-header">
+        <h3 id="pathBrowserTitle" style="color:var(--accent);">Browse Folder</h3>
+        <button type="button" class="btn-secondary btn-sm" id="pathBrowserCancelTopBtn">Cancel</button>
+    </div>
+    <div id="pathBrowserDrives" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;"></div>
+    <div class="input-row" style="margin-bottom:8px;">
+        <button type="button" class="btn-secondary btn-sm" id="pathBrowserDrivesBtn" title="Show all drives">Drives</button>
+        <button type="button" class="btn-secondary btn-sm" id="pathBrowserUpBtn" title="Go up one folder">&uarr; Up</button>
+        <input type="text" id="pathBrowserPathInput" placeholder="Enter path or click a drive / folder below..." aria-label="Current browse path">
+        <button type="button" class="btn-secondary btn-sm" id="pathBrowserGoBtn">Go</button>
+    </div>
+    <div id="pathBrowserMkdirRow" class="input-row" style="margin-bottom:10px; display:none;">
+        <input type="text" id="pathBrowserNewFolderInput" placeholder="New subfolder name inside current folder..." aria-label="New subfolder name">
+        <button type="button" class="btn-amber btn-sm" id="pathBrowserMkdirBtn" style="white-space:nowrap;">+ New Folder</button>
+    </div>
+    <output id="pathBrowserStatus" class="status-output" style="display:block; margin-bottom:8px;" aria-live="polite"></output>
+    <ul id="pathBrowserList" class="folder-list" style="max-height:360px; margin-bottom:12px;"></ul>
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding-top:10px; border-top:1px solid var(--border);">
+        <span id="pathBrowserSelectedHint" style="font-size:12px; color:var(--muted); font-family:Consolas, monospace; word-break:break-all;"></span>
+        <div style="display:flex; gap:8px; flex-shrink:0;">
+            <button type="button" class="btn-secondary" id="pathBrowserCancelBtn">Cancel</button>
+            <button type="button" class="btn-green" id="pathBrowserConfirmBtn" disabled>Select This Folder</button>
+        </div>
+    </div>
 </dialog>
 
 <!-- 7. QUARANTINED FILES VIEW & PURGE DIALOG -->
@@ -1734,52 +1762,177 @@
         }
     }
 
-    async function browseForStagingFolder(buttonId, statusElemId) {
-        const btn = document.getElementById(buttonId);
-        const statusEl = statusElemId ? document.getElementById(statusElemId) : null;
-        const origLabel = btn ? btn.innerText : "Browse...";
+    let pathBrowserState = {
+        mode: "folder",
+        currentPath: "",
+        parentPath: "",
+        selectedPath: "",
+        resolve: null
+    };
 
-        if (btn) {
-            btn.disabled = true;
-            btn.innerText = "Opening...";
-        }
-        if (statusEl) {
-            statusEl.style.color = "var(--muted)";
-            statusEl.innerText = "Waiting for Windows Explorer dialog...";
-        }
+    function finishPathBrowser(chosenPath) {
+        const resolver = pathBrowserState.resolve;
+        pathBrowserState.resolve = null;
+        closeModal("pathBrowserModal");
+        if (resolver) resolver(chosenPath || "");
+    }
 
+    async function loadPathBrowserDir(targetPath) {
+        const listEl = document.getElementById("pathBrowserList");
+        const statusEl = document.getElementById("pathBrowserStatus");
+        const pathInput = document.getElementById("pathBrowserPathInput");
+        const drivesEl = document.getElementById("pathBrowserDrives");
+        const upBtn = document.getElementById("pathBrowserUpBtn");
+        const mkdirRow = document.getElementById("pathBrowserMkdirRow");
+        const confirmBtn = document.getElementById("pathBrowserConfirmBtn");
+        const hintEl = document.getElementById("pathBrowserSelectedHint");
+
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = "Loading...";
         try {
-            const res = await fetch("/api/browse", {
+            const res = await fetch("/api/browse_dir", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ mode: "folder" })
+                body: JSON.stringify({
+                    path: targetPath || "",
+                    mode: pathBrowserState.mode,
+                    file_ext: pathBrowserState.mode === "contig" ? ".exe" : ""
+                })
             });
             const data = await res.json();
-            if (data.ok && data.path) {
-                appConfig.staging_folder = data.path;
-                populateStagingRootSelect(data.path);
-                await saveSettings();
-                renderIntakeQueue();
-                if (statusEl) {
-                    statusEl.style.color = "var(--green)";
-                    statusEl.innerText = `Staging folder set to ${data.path} and saved.`;
-                }
-            } else if (data.ok && data.cancelled) {
-                if (statusEl) statusEl.innerText = "";
-            } else if (statusEl) {
-                statusEl.style.color = "var(--red)";
-                statusEl.innerText = data.message || "Could not open browse dialog.";
+            pathBrowserState.currentPath = data.current_path || "";
+            pathBrowserState.parentPath = data.parent_path || "";
+            pathInput.value = pathBrowserState.currentPath;
+
+            if (pathBrowserState.mode === "folder") {
+                pathBrowserState.selectedPath = pathBrowserState.currentPath;
+            } else if (!pathBrowserState.selectedPath || !pathBrowserState.selectedPath.toLowerCase().startsWith((pathBrowserState.currentPath || "").toLowerCase())) {
+                pathBrowserState.selectedPath = "";
+            }
+
+            // Render quick-jump drive buttons
+            const drives = data.drives || [];
+            drivesEl.innerHTML = drives.map(d => {
+                const freeTxt = d.free_gb !== null && d.free_gb !== undefined ? ` (${d.free_gb} GB)` : "";
+                return `<button type="button" class="btn-secondary btn-sm" data-browse-open="${escapeHtml(d.path)}">${escapeHtml(d.name)}${freeTxt}</button>`;
+            }).join("");
+
+            upBtn.disabled = Boolean(data.is_drives_view);
+            mkdirRow.style.display = (!data.is_drives_view && pathBrowserState.mode === "folder") ? "flex" : "none";
+
+            if (!data.ok && data.message) {
+                statusEl.style.color = "var(--amber)";
+                statusEl.innerText = data.message;
+            } else {
+                statusEl.innerText = "";
+            }
+
+            if (data.is_drives_view) {
+                listEl.innerHTML = drives.map(d => {
+                    const spaceTxt = (d.free_gb !== null && d.total_gb !== null) ? `${d.free_gb} GB free of ${d.total_gb} GB` : "Local Drive";
+                    return `
+                        <li class="folder-item" style="cursor:pointer;" data-browse-open="${escapeHtml(d.path)}">
+                            <div><strong>&#128190; ${escapeHtml(d.name)}</strong> <span style="color:var(--muted); font-size:12px; margin-left:8px;">${spaceTxt}</span></div>
+                            <button type="button" class="btn-secondary btn-sm" data-browse-open="${escapeHtml(d.path)}">Open</button>
+                        </li>
+                    `;
+                }).join("") || `<li style="color:var(--muted); font-size:13px;">No drives detected.</li>`;
+            } else {
+                const folderItems = (data.folders || []).map(f => `
+                    <li class="folder-item" style="cursor:pointer;" data-browse-open="${escapeHtml(f.path)}">
+                        <div style="font-family:Consolas, monospace; font-size:13px;">&#128193; ${escapeHtml(f.name)}</div>
+                        <button type="button" class="btn-secondary btn-sm" data-browse-open="${escapeHtml(f.path)}">Open</button>
+                    </li>
+                `);
+                const fileItems = (data.files || []).map(fi => {
+                    const isSel = pathBrowserState.selectedPath && pathBrowserState.selectedPath.toLowerCase() === fi.path.toLowerCase();
+                    return `
+                        <li class="folder-item" style="cursor:pointer; ${isSel ? "border-color:var(--accent);" : ""}" data-browse-select-file="${escapeHtml(fi.path)}">
+                            <div style="font-family:Consolas, monospace; font-size:13px; color:${isSel ? "var(--accent)" : "var(--text)"};">&#128196; ${escapeHtml(fi.name)}</div>
+                            <button type="button" class="btn-green btn-sm" data-browse-select-file="${escapeHtml(fi.path)}">Select</button>
+                        </li>
+                    `;
+                });
+                const combined = [...folderItems, ...fileItems];
+                listEl.innerHTML = combined.length > 0
+                    ? combined.join("")
+                    : `<li style="color:var(--muted); font-size:13px;">No subfolders${pathBrowserState.mode === "contig" ? " or .exe files" : ""} here.</li>`;
+            }
+
+            if (pathBrowserState.mode === "folder") {
+                confirmBtn.innerText = "Select This Folder";
+                confirmBtn.disabled = !pathBrowserState.currentPath;
+                hintEl.innerText = pathBrowserState.currentPath ? `Selected: ${pathBrowserState.currentPath}` : "Pick a drive or folder";
+            } else {
+                confirmBtn.innerText = "Select File";
+                confirmBtn.disabled = !pathBrowserState.selectedPath;
+                hintEl.innerText = pathBrowserState.selectedPath ? `Selected: ${pathBrowserState.selectedPath}` : "Select an .exe file";
             }
         } catch (err) {
-            if (statusEl) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Browse error: ${err.message}`;
+        }
+    }
+
+    async function createSubfolderInPathBrowser() {
+        const input = document.getElementById("pathBrowserNewFolderInput");
+        const statusEl = document.getElementById("pathBrowserStatus");
+        const name = (input.value || "").trim();
+        if (!name || !pathBrowserState.currentPath) return;
+        try {
+            const res = await fetch("/api/browse_mkdir", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ parent_path: pathBrowserState.currentPath, folder_name: name })
+            });
+            const data = await res.json();
+            if (!data.ok) {
                 statusEl.style.color = "var(--red)";
-                statusEl.innerText = `Browse error: ${err.message}`;
+                statusEl.innerText = data.message || "Could not create folder.";
+                return;
             }
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.innerText = origLabel;
-            }
+            input.value = "";
+            await loadPathBrowserDir(data.path || pathBrowserState.currentPath);
+            statusEl.style.color = "var(--green)";
+            statusEl.innerText = data.message;
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Create folder error: ${err.message}`;
+        }
+    }
+
+    function openInAppPathBrowser({ mode = "folder", startPath = "", title = "" } = {}) {
+        return new Promise((resolve) => {
+            pathBrowserState = {
+                mode,
+                currentPath: "",
+                parentPath: "",
+                selectedPath: "",
+                resolve
+            };
+            document.getElementById("pathBrowserTitle").innerText = title || (mode === "contig" ? "Select Sysinternals contig64.exe" : "Browse Folder");
+            document.getElementById("pathBrowserNewFolderInput").value = "";
+            openModal("pathBrowserModal");
+            loadPathBrowserDir(startPath);
+        });
+    }
+
+    async function browseForStagingFolder(buttonId, statusElemId) {
+        const statusEl = statusElemId ? document.getElementById(statusElemId) : null;
+        const startPath = appConfig.staging_folder || (appConfig.library_folders || [])[0] || "";
+        const chosen = await openInAppPathBrowser({
+            mode: "folder",
+            startPath,
+            title: "Select Default Staging Folder"
+        });
+        if (!chosen) return;
+        appConfig.staging_folder = chosen;
+        populateStagingRootSelect(chosen);
+        await saveSettings();
+        renderIntakeQueue();
+        if (statusEl) {
+            statusEl.style.color = "var(--green)";
+            statusEl.innerText = `Staging folder set to ${chosen} and saved.`;
         }
     }
 
@@ -1922,50 +2075,24 @@
     }
 
     async function browseForPath(mode, inputId, buttonId, statusElemId) {
-        const btn = document.getElementById(buttonId);
+        const inputEl = document.getElementById(inputId);
         const statusEl = statusElemId ? document.getElementById(statusElemId) : null;
-        const origLabel = btn ? btn.innerText : "Browse...";
-
-        if (btn) {
-            btn.disabled = true;
-            btn.innerText = "Opening...";
+        const startPath = (inputEl && inputEl.value.trim()) ? inputEl.value.trim() : ((appConfig.library_folders || [])[0] || "");
+        const chosen = await openInAppPathBrowser({
+            mode,
+            startPath,
+            title: mode === "contig" ? "Select Sysinternals contig64.exe" : "Browse Folder"
+        });
+        if (!chosen) return;
+        if (inputEl) {
+            inputEl.value = chosen;
+            inputEl.dispatchEvent(new Event("input", { bubbles: true }));
         }
         if (statusEl) {
-            statusEl.style.color = "var(--muted)";
-            statusEl.innerText = "Waiting for Windows Explorer dialog...";
-        }
-
-        try {
-            const res = await fetch("/api/browse", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ mode })
-            });
-            const data = await res.json();
-            if (data.ok && data.path) {
-                document.getElementById(inputId).value = data.path;
-                if (statusEl) {
-                    statusEl.style.color = "var(--green)";
-                    statusEl.innerText = mode === "contig"
-                        ? "Selected contig executable — click Save Maintenance Schedule to apply."
-                        : "Selected intake folder — click Add to save.";
-                }
-            } else if (data.ok && data.cancelled) {
-                if (statusEl) statusEl.innerText = "";
-            } else if (statusEl) {
-                statusEl.style.color = "var(--red)";
-                statusEl.innerText = data.message || "Could not open browse dialog.";
-            }
-        } catch (err) {
-            if (statusEl) {
-                statusEl.style.color = "var(--red)";
-                statusEl.innerText = `Browse error: ${err.message}`;
-            }
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.innerText = origLabel;
-            }
+            statusEl.style.color = "var(--green)";
+            statusEl.innerText = mode === "contig"
+                ? `Selected ${chosen} — click Save Maintenance Schedule to apply.`
+                : `Selected folder: ${chosen}`;
         }
     }
 
@@ -2847,18 +2974,28 @@
         }
     }
 
+    function normalisePathKey(p) {
+        return String(p || "").trim().replace(/[\\/]+$/, "").toLowerCase();
+    }
+
     function buildRootFolderOptionsHtml(currentRoot) {
         const apiRoots = (collectionsOverview && collectionsOverview.root_folders) ? collectionsOverview.root_folders : [];
         const mergedMap = new Map();
         apiRoots.forEach(rf => {
-            if (rf && rf.path) mergedMap.set(rf.path.toLowerCase(), rf);
+            if (rf && rf.path) mergedMap.set(normalisePathKey(rf.path), rf);
         });
         (appConfig.library_folders || []).forEach(lf => {
-            if (lf && !mergedMap.has(lf.toLowerCase())) {
+            const lk = normalisePathKey(lf);
+            if (lf && !mergedMap.has(lk)) {
                 const drv = (lf.match(/^[A-Za-z]:/) || ["LOCAL"])[0].toUpperCase();
-                mergedMap.set(lf.toLowerCase(), { path: lf, drive: drv, online: true, free_gb: null });
+                mergedMap.set(lk, { path: lf, drive: drv, online: true, free_gb: null });
             }
         });
+        const normCurrent = normalisePathKey(currentRoot);
+        if (currentRoot && normCurrent && !mergedMap.has(normCurrent)) {
+            const drv = (currentRoot.match(/^[A-Za-z]:/) || ["LOCAL"])[0].toUpperCase();
+            mergedMap.set(normCurrent, { path: currentRoot, drive: drv, online: true, free_gb: null });
+        }
         const roots = Array.from(mergedMap.values()).sort((a, b) => {
             const da = (a.drive || "").toLowerCase();
             const db = (b.drive || "").toLowerCase();
@@ -2871,7 +3008,7 @@
         return roots.map(rf => {
             const freeTxt = rf.free_gb !== null ? ` (${rf.free_gb} GB free)` : "";
             const offTxt = rf.online ? "" : " [OFFLINE]";
-            const sel = currentRoot && currentRoot.toLowerCase() === rf.path.toLowerCase() ? "selected" : "";
+            const sel = normCurrent && normCurrent === normalisePathKey(rf.path) ? "selected" : "";
             return `<option value="${escapeHtml(rf.path)}" ${sel}>${escapeHtml(rf.path)}${freeTxt}${offTxt}</option>`;
         }).join("");
     }
@@ -3287,6 +3424,107 @@
         openModal("createCustomRootModal");
     }
 
+    function applyCreatedRootToCollectionsUI(collKey, collType, collName, createdPath, data) {
+        if (data.overview) {
+            collectionsOverview = data.overview;
+        }
+        if (data.folder_status) {
+            appConfig.library_folders = (data.folder_status.library_folders || []).map(f => f.path);
+            renderFolderLists(data.folder_status);
+            renderDrivePies(data.folder_status);
+        }
+        // Guarantee the newly created path exists in root_folders and is set as the collection's root_folder
+        if (createdPath && collectionsOverview) {
+            const normNew = normalisePathKey(createdPath);
+            if (!Array.isArray(collectionsOverview.root_folders)) collectionsOverview.root_folders = [];
+            if (!collectionsOverview.root_folders.some(rf => normalisePathKey(rf.path) === normNew)) {
+                const drv = (createdPath.match(/^[A-Za-z]:/) || ["LOCAL"])[0].toUpperCase();
+                collectionsOverview.root_folders.push({ path: createdPath, drive: drv, online: true, free_gb: null });
+            }
+            const resolved = collKey ? getCollectionByKey(collKey) : null;
+            if (resolved && resolved.entry) {
+                resolved.entry.root_folder = createdPath;
+            }
+        }
+        if (collKey) {
+            collectionRootNotes[collKey] = data.message;
+        }
+        renderCollectionsUI();
+
+        // Explicitly select the new folder path in that collection's dropdown
+        if (collKey && createdPath) {
+            const [t, idxStr] = collKey.split(":");
+            const selId = `coll-root-${t}-${idxStr}`;
+            const selEl = document.getElementById(selId);
+            if (selEl) {
+                const normTarget = normalisePathKey(createdPath);
+                const matchingOpt = Array.from(selEl.options).find(opt => normalisePathKey(opt.value) === normTarget);
+                if (matchingOpt) {
+                    selEl.value = matchingOpt.value;
+                }
+            }
+        }
+    }
+
+    async function handleQuickCreateCollectionFolder(collKey, triggerBtn) {
+        const resolved = getCollectionByKey(collKey);
+        if (!resolved) return;
+        const presetParent = (document.getElementById("collectionsPresetParentInput").value || "").trim()
+            || (collectionsOverview && collectionsOverview.collections_root_parent ? collectionsOverview.collections_root_parent : "");
+
+        // If no preset parent location is configured yet, prompt the user via the modal
+        if (!presetParent) {
+            openCreateCustomRootDialog("card", collKey);
+            return;
+        }
+
+        const { type, entry } = resolved;
+        const collName = entry.name || "Collection";
+        const statusEl = document.getElementById("collectionsStatus");
+        const origLabel = triggerBtn ? triggerBtn.innerText : "+ Create Folder";
+        if (triggerBtn) {
+            triggerBtn.disabled = true;
+            triggerBtn.innerText = "Creating...";
+        }
+        statusEl.style.color = "var(--accent)";
+        statusEl.innerText = `Creating folder '${collName}' under ${presetParent} and updating Radarr...`;
+
+        try {
+            const res = await fetch("/api/collections/create_root", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    parent_folder: presetParent,
+                    folder_name: collName,
+                    collection_type: type,
+                    collection_id: type === "native" && entry.id !== null && entry.id !== undefined ? entry.id : null,
+                    custom_id: type === "custom" ? (entry.id || "") : "",
+                    collection_name: collName,
+                    save_as_preset: false
+                })
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                statusEl.style.color = "var(--red)";
+                statusEl.innerText = data.message || "Failed to create collection folder.";
+                return;
+            }
+            const createdPath = data.detail && data.detail.path ? data.detail.path : "";
+            statusEl.style.color = "var(--green)";
+            statusEl.innerText = data.message;
+            applyCreatedRootToCollectionsUI(collKey, type, collName, createdPath, data);
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Create folder failed: ${err.message}`;
+        } finally {
+            if (triggerBtn) {
+                triggerBtn.disabled = false;
+                triggerBtn.innerText = origLabel;
+            }
+            refreshLogs();
+        }
+    }
+
     async function submitCreateCustomRootForm(alsoMove = false) {
         const fb = document.getElementById("createCustomRootFeedback");
         const statusEl = document.getElementById("collectionsStatus");
@@ -3339,29 +3577,14 @@
             if (saveAsPreset && parentFolder) {
                 document.getElementById("collectionsPresetParentInput").value = parentFolder;
             }
-            if (data.overview) {
-                collectionsOverview = data.overview;
-            }
-            if (data.folder_status) {
-                appConfig.library_folders = (data.folder_status.library_folders || []).map(f => f.path);
-                renderFolderLists(data.folder_status);
-                renderDrivePies(data.folder_status);
-            }
             closeModal("createCustomRootModal");
             statusEl.style.color = "var(--green)";
             statusEl.innerText = data.message;
-            if (collKey) {
-                collectionRootNotes[collKey] = data.message;
-            }
-            renderCollectionsUI();
+            applyCreatedRootToCollectionsUI(collKey, collType, collName || folderName, createdPath, data);
 
             if (alsoMove && mode === "card" && collKey && createdPath) {
                 const [t, idxStr] = collKey.split(":");
                 const selId = `coll-root-${t}-${idxStr}`;
-                const selEl = document.getElementById(selId);
-                if (selEl) {
-                    selEl.value = createdPath;
-                }
                 const cardMoveBtn = document.querySelector(`[data-bulk-move="${collKey}"]`);
                 enqueueAction(`Bulk Move: ${collName || folderName}`, cardMoveBtn, () => executeBulkMove(collKey, selId, cardMoveBtn, true));
             }
@@ -3814,7 +4037,7 @@
             }
             const createRootBtn = e.target.closest("[data-create-coll-root]");
             if (createRootBtn) {
-                openCreateCustomRootDialog("card", createRootBtn.dataset.createCollRoot);
+                handleQuickCreateCollectionFolder(createRootBtn.dataset.createCollRoot, createRootBtn);
             }
         });
         document.getElementById("browseCollectionsPresetBtn").addEventListener("click", () => browseForPath("folder", "collectionsPresetParentInput", "browseCollectionsPresetBtn", "collectionsStatus"));
@@ -3832,6 +4055,51 @@
             submitCreateCustomRootForm(false);
         });
         document.getElementById("confirmCreateAndMoveRootBtn").addEventListener("click", () => submitCreateCustomRootForm(true));
+
+        // In-app Folder & File Browser event listeners
+        document.getElementById("pathBrowserCancelTopBtn").addEventListener("click", () => finishPathBrowser(""));
+        document.getElementById("pathBrowserCancelBtn").addEventListener("click", () => finishPathBrowser(""));
+        document.getElementById("pathBrowserDrivesBtn").addEventListener("click", () => loadPathBrowserDir(""));
+        document.getElementById("pathBrowserUpBtn").addEventListener("click", () => loadPathBrowserDir(pathBrowserState.parentPath));
+        document.getElementById("pathBrowserGoBtn").addEventListener("click", () => {
+            loadPathBrowserDir(document.getElementById("pathBrowserPathInput").value.trim());
+        });
+        document.getElementById("pathBrowserPathInput").addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                loadPathBrowserDir(e.target.value.trim());
+            }
+        });
+        document.getElementById("pathBrowserMkdirBtn").addEventListener("click", createSubfolderInPathBrowser);
+        document.getElementById("pathBrowserConfirmBtn").addEventListener("click", () => {
+            const chosen = pathBrowserState.mode === "folder" ? pathBrowserState.currentPath : pathBrowserState.selectedPath;
+            if (chosen) finishPathBrowser(chosen);
+        });
+        document.getElementById("pathBrowserModal").addEventListener("click", (e) => {
+            const openEl = e.target.closest("[data-browse-open]");
+            if (openEl) {
+                loadPathBrowserDir(openEl.dataset.browseOpen);
+                return;
+            }
+            const fileEl = e.target.closest("[data-browse-select-file]");
+            if (fileEl) {
+                pathBrowserState.selectedPath = fileEl.dataset.browseSelectFile;
+                document.getElementById("pathBrowserSelectedHint").innerText = `Selected: ${pathBrowserState.selectedPath}`;
+                document.getElementById("pathBrowserConfirmBtn").disabled = false;
+                if (e.target.tagName === "BUTTON") {
+                    finishPathBrowser(pathBrowserState.selectedPath);
+                } else {
+                    loadPathBrowserDir(pathBrowserState.currentPath);
+                }
+            }
+        });
+        document.getElementById("pathBrowserModal").addEventListener("cancel", () => {
+            if (pathBrowserState.resolve) {
+                const r = pathBrowserState.resolve;
+                pathBrowserState.resolve = null;
+                r("");
+            }
+        });
         document.getElementById("collectionsModal").addEventListener("change", (e) => {
             const sel = e.target.closest("[data-coll-root-select]");
             if (sel && sel.value) {

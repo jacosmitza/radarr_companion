@@ -1,4 +1,4 @@
-# Radarr Companion (v1.3)
+# Radarr Companion (v1.5)
 
 **A 100% local-first Windows 10/11 Pro utility extending Radarr v3 for multi-drive movie libraries, smart duplicate elimination, stranded intake triage, collection management, and spinning-HDD maintenance.**
 
@@ -85,6 +85,8 @@ pyinstaller --clean --noconfirm RadarrCompanion.spec
 
 ## Version History
 
+- **v1.5 (2026-11-26)** — Replaced background Windows Explorer browse dialogs with an instant, Radarr-style **In-App Folder & File Browser** (`POST /api/browse_dir` + `POST /api/browse_mkdir`) featuring quick-jump drive buttons, free-space readouts, breadcrumb/path navigation, inline `+ New Folder` creation, and `.exe` file selection for Sysinternals `contig64.exe`.
+- **v1.4 (2026-11-26)** — Made `+ Create Folder` immediately create the collection folder on disk, register it via Radarr `/api/v3/rootfolder`, assign it to the collection (`/api/v3/collection/{id}` or `config.json`), and immediately select the newly created path in that collection's root-folder dropdown (with trailing-slash-safe path matching). If no preset parent folder is set yet, it prompts via the Create Collection Folder dialog first.
 - **v1.3 (2026-11-26)** — Added Active-Transfer Exclusion Guard (`track_active_transfer` + `.rc_tmp` sibling check) so files currently being moved by Collection Bulk Moves, Intake Imports, or Duplicate Swaps are never falsely detected as duplicate entries during a scan.
 - **v1.2 (2026-11-26)** — Added Active-Job Shutdown Guard (`POST /api/shutdown` returns HTTP `409 Conflict` when a job or maintenance defrag is active unless `force: true`; launcher prompts user to **Wait (Recommended)**, **Force Close**, or **Cancel** via console or Windows dialog). Consolidated `Readme.txt` into `README.md` and removed the old `Readme.txt`.
 - **v1.1 (2026-11-26)** — Added `+ Create Folder` button to every Native and Custom Collection card next to Bulk Move, persistent preset parent location (`collections_root_parent`), and one-click **Create & Move Movies**.

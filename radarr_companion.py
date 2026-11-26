@@ -3504,6 +3504,7 @@ def create_custom_collection_root_folder(payload, cfg):
 
     # Assign directly to the collection (native in Radarr OR custom in config.json)
     assigned_collection = False
+    assign_err = ""
     if coll_type == "native" and coll_id is not None and str(coll_id).isdigit():
         if cfg.get("radarr_url") and cfg.get("radarr_api_key"):
             try:
@@ -3512,7 +3513,11 @@ def create_custom_collection_root_folder(payload, cfg):
                     coll_obj["rootFolderPath"] = target_path
                     radarr_api_request(cfg, f"/api/v3/collection/{int(coll_id)}", method="PUT", payload=coll_obj, timeout=10)
                     assigned_collection = True
+                    log_event(f"Updated Radarr native collection '{collection_name}' (ID {coll_id}) rootFolderPath -> {target_path}", "INFO")
+                else:
+                    assign_err = f"Collection ID {coll_id} not found in Radarr"
             except Exception as exc:
+                assign_err = str(exc)
                 log_event(f"Could not update native Radarr collection root for '{collection_name}': {exc}", "WARN")
     elif custom_id:
         customs = normalise_custom_collections(cfg.get("custom_collections", []))
@@ -3524,23 +3529,26 @@ def create_custom_collection_root_folder(payload, cfg):
         cfg["custom_collections"] = customs
 
     save_config(cfg)
-    details = [f"Created collection root folder: {target_path}"]
+    details = [f"Created folder: {target_path}"]
     if radarr_note:
         details.append(radarr_note)
     if library_added:
         details.append("added to Library folders")
     if assigned_collection:
         details.append(f"assigned to '{collection_name}'")
+    elif assign_err:
+        details.append(f"Radarr collection update warning: {assign_err}")
     if preset_saved:
         details.append("saved preset parent")
     msg = " — ".join(details) + "."
-    finish_job(jid, msg, state="completed")
-    log_event(f"Collections: {msg}", "INFO")
+    finish_job(jid, msg, state="completed" if not assign_err else "warning")
+    log_event(f"Collections: {msg}", "INFO" if not assign_err else "WARN")
     return True, msg, {
         "path": target_path,
         "radarr_registered": radarr_registered,
         "library_added": library_added,
         "assigned_collection": assigned_collection,
+        "assign_error": assign_err,
         "preset_saved": preset_saved
     }
 
@@ -4537,6 +4545,20 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "message": f"Update failed: {exc}"}, status=500)
             return
 
+        if self.path == "/api/browse_dir":
+            payload = self._read_json()
+            ok, listing, err = list_directory_for_browser(payload)
+            resp = {"ok": ok, "message": err}
+            resp.update(listing)
+            self._send_json(resp, status=200 if ok else 400)
+            return
+
+        if self.path == "/api/browse_mkdir":
+            payload = self._read_json()
+            ok, new_path, msg = create_subfolder_for_browser(payload)
+            self._send_json({"ok": ok, "path": new_path, "message": msg}, status=200 if ok else 400)
+            return
+
         if self.path == "/api/browse":
             payload = self._read_json()
             mode = str(payload.get("mode") or "folder").strip().lower()
@@ -4738,6 +4760,139 @@ class CompanionHandler(BaseHTTPRequestHandler):
 
         self.send_response(404)
         self.end_headers()
+
+
+def list_windows_drives_for_browser():
+    """Returns a sorted list of accessible mounted drives on Windows with free/total GB."""
+    drives = []
+    if os.name == "nt":
+        try:
+            bitmask = ctypes.windll.kernel32.GetLogicalDrives()
+            letters = [chr(65 + i) for i in range(26) if bitmask & (1 << i)]
+        except Exception:
+            letters = [chr(c) for c in range(ord("A"), ord("Z") + 1)]
+        for letter in letters:
+            root = f"{letter}:\\"
+            if os.path.isdir(root):
+                free_gb = total_gb = None
+                try:
+                    usage = shutil.disk_usage(root)
+                    free_gb = round(usage.free / (1024 ** 3), 1)
+                    total_gb = round(usage.total / (1024 ** 3), 1)
+                except OSError:
+                    pass
+                drives.append({
+                    "name": root,
+                    "path": root,
+                    "free_gb": free_gb,
+                    "total_gb": total_gb
+                })
+    else:
+        drives.append({"name": "/", "path": "/", "free_gb": None, "total_gb": None})
+    return drives
+
+
+def list_directory_for_browser(payload):
+    """
+    Lists drives, subfolders, and (in file/contig mode) matching files for the in-app
+    Radarr-style folder/file browser so the UI never depends on background Windows dialogs.
+    """
+    raw_path = str(payload.get("path") or "").strip()
+    mode = str(payload.get("mode") or "folder").strip().lower()
+    file_ext = str(payload.get("file_ext") or (".exe" if mode == "contig" else "")).strip().lower()
+    drives = list_windows_drives_for_browser()
+
+    if not raw_path or raw_path == "__DRIVES__":
+        return True, {
+            "current_path": "",
+            "parent_path": "",
+            "is_drives_view": True,
+            "drives": drives,
+            "folders": [],
+            "files": []
+        }, ""
+
+    norm_path = os.path.normpath(raw_path)
+    if re.match(r"^[A-Za-z]:$", norm_path):
+        norm_path += "\\"
+    if os.path.isfile(win_long_path(norm_path)):
+        norm_path = os.path.dirname(norm_path)
+    if not os.path.isdir(win_long_path(norm_path)):
+        return False, {
+            "current_path": "",
+            "parent_path": "",
+            "is_drives_view": True,
+            "drives": drives,
+            "folders": [],
+            "files": []
+        }, f"Folder not found or drive offline: {norm_path}"
+
+    # Determine parent path (if at drive root like D:\, parent_path is "" -> Drives list)
+    parent = os.path.dirname(norm_path.rstrip("\\/"))
+    if not parent or os.path.normcase(parent) == os.path.normcase(norm_path.rstrip("\\/")):
+        parent_path = ""
+    else:
+        if re.match(r"^[A-Za-z]:$", parent):
+            parent += "\\"
+        parent_path = parent
+
+    skip_names = {"$recycle.bin", "system volume information", "recovery", "perflogs"}
+    folders = []
+    files = []
+    try:
+        with os.scandir(win_long_path(norm_path)) as it:
+            for entry in it:
+                name_low = entry.name.lower()
+                if name_low in skip_names:
+                    continue
+                full_entry = os.path.join(norm_path, entry.name)
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        folders.append({"name": entry.name, "path": full_entry})
+                    elif mode in ("file", "contig") and entry.is_file(follow_symlinks=False):
+                        if not file_ext or name_low.endswith(file_ext):
+                            files.append({"name": entry.name, "path": full_entry})
+                except OSError:
+                    continue
+    except OSError as exc:
+        return False, {
+            "current_path": norm_path,
+            "parent_path": parent_path,
+            "is_drives_view": False,
+            "drives": drives,
+            "folders": [],
+            "files": []
+        }, f"Cannot read folder ({norm_path}): {exc}"
+
+    folders.sort(key=lambda x: x["name"].lower())
+    files.sort(key=lambda x: x["name"].lower())
+    return True, {
+        "current_path": norm_path,
+        "parent_path": parent_path,
+        "is_drives_view": False,
+        "drives": drives,
+        "folders": folders,
+        "files": files
+    }, ""
+
+
+def create_subfolder_for_browser(payload):
+    """Creates a new subfolder inside current_path from the in-app folder browser."""
+    parent_path = str(payload.get("parent_path") or "").strip()
+    folder_name = sanitise_windows_filename(str(payload.get("folder_name") or "").strip())
+    if not parent_path or not folder_name:
+        return False, "", "Both parent path and new folder name are required."
+    if re.match(r"^[A-Za-z]:$", parent_path):
+        parent_path += "\\"
+    if not os.path.isdir(win_long_path(parent_path)):
+        return False, "", f"Parent folder does not exist or drive is offline: {parent_path}"
+    target = os.path.normpath(os.path.join(parent_path, folder_name))
+    try:
+        os.makedirs(win_long_path(target), exist_ok=True)
+        log_event(f"Created folder via in-app browser: {target}", "INFO")
+        return True, target, f"Created folder: {target}"
+    except OSError as exc:
+        return False, "", f"Could not create folder: {exc}"
 
 
 def clear_saved_api_key():
