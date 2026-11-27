@@ -1,4 +1,4 @@
-# Radarr Companion (v1.5)
+# Radarr Companion (v2.0)
 
 **A 100% local-first Windows 10/11 Pro utility extending Radarr v3 for multi-drive movie libraries, smart duplicate elimination, stranded intake triage, collection management, and spinning-HDD maintenance.**
 
@@ -85,6 +85,12 @@ pyinstaller --clean --noconfirm RadarrCompanion.spec
 
 ## Version History
 
+- **v2.0 (2026-11-27)** — Major architecture & workflow milestone:
+  - **Local SQLite Database (`radarr_companion.db`):** Transitioned local storage from `config.json` to an embedded WAL-mode SQLite database with automatic one-time migration (preserving `config.json.migrated.bak`) and DPAPI-encrypted secret storage.
+  - **Routing Flows & Rules Engine:** Added a priority-ordered movie routing system with built-in **Collection Priority Slots** (*Custom Collections*, *Multi-Movie Native Collections*, and *Single-Release Collections*) that can be ranked above or below normal genre/rating/language/tag/year rules, plus one-click import of Radarr's saved Custom Filters (`/api/v3/customfilter`), dry-run preview, per-movie ignore, and queued Robocopy moves.
+  - **Optional Skip 0 KB Movies (`skip_zero_kb_movies`):** Automatically skips moving missing/unreleased 0 KB movies during Collection Bulk Moves and Routing Flows (configurable in Settings).
+  - **Opt-In GitHub Update Check:** Added a user-confirmed **Check Updates** dialog comparing the running version against `github.com/jacosmitza/radarr_companion` with zero background phoning home.
+- **v1.6 (2026-11-27)** — Added **Configurable Torrent Client Seeding Protection** (qBittorrent WebUI API v2 on any custom port, Transmission RPC, and Deluge JSON-RPC, with DPAPI-encrypted password storage) so actively seeding intake/duplicate files are marked `SEEDING`, skipped by bulk actions, and protected until seeding finishes. Added **Windows Administrator Elevation Detection & One-Click UAC Relaunch** (`POST /api/relaunch_admin`) in Library Maintenance to prevent `Access is denied` errors when running `contig64.exe` / `defrag.exe` as a standard user.
 - **v1.5 (2026-11-26)** — Replaced background Windows Explorer browse dialogs with an instant, Radarr-style **In-App Folder & File Browser** (`POST /api/browse_dir` + `POST /api/browse_mkdir`) featuring quick-jump drive buttons, free-space readouts, breadcrumb/path navigation, inline `+ New Folder` creation, and `.exe` file selection for Sysinternals `contig64.exe`.
 - **v1.4 (2026-11-26)** — Made `+ Create Folder` immediately create the collection folder on disk, register it via Radarr `/api/v3/rootfolder`, assign it to the collection (`/api/v3/collection/{id}` or `config.json`), and immediately select the newly created path in that collection's root-folder dropdown (with trailing-slash-safe path matching). If no preset parent folder is set yet, it prompts via the Create Collection Folder dialog first.
 - **v1.3 (2026-11-26)** — Added Active-Transfer Exclusion Guard (`track_active_transfer` + `.rc_tmp` sibling check) so files currently being moved by Collection Bulk Moves, Intake Imports, or Duplicate Swaps are never falsely detected as duplicate entries during a scan.

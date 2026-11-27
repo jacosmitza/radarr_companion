@@ -50,14 +50,17 @@ import os
 import re
 import shutil
 import socket
+import sqlite3
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 from collections import defaultdict
 from ctypes import wintypes
 from datetime import datetime, timedelta
+from http import cookiejar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 if HAS_MEDIAINFO:
@@ -81,13 +84,18 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     RESOURCE_DIR = BASE_DIR
 
-CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
+APP_VERSION = "2.0"
+GITHUB_REPO = "jacosmitza/radarr_companion"
+DB_FILE = os.path.join(BASE_DIR, "radarr_companion.db")
+CONFIG_FILE = os.path.join(BASE_DIR, "config.json")  # Legacy JSON (auto-migrated to radarr_companion.db)
 LOG_FILE = os.path.join(BASE_DIR, "radarr_companion.log")
 HTML_FILE = os.path.join(BASE_DIR, "dashboard.html") if os.path.exists(os.path.join(BASE_DIR, "dashboard.html")) else os.path.join(RESOURCE_DIR, "dashboard.html")
 HTTP_HOST = "127.0.0.1"
 HTTP_PORT = 8085
 SERVER_INSTANCE_ID = f"{os.getpid()}-{int(time.time() * 1000)}"
 ACTIVE_HTTP_SERVER = None
+DB_LOCK = threading.Lock()
+DB_INITIALISED = False
 
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts", ".m2ts"}
 SUBTITLE_EXTENSIONS = {".srt", ".sub", ".idx", ".ass", ".ssa", ".vtt"}
@@ -119,7 +127,12 @@ DEFAULT_CONFIG = {
     "collection_location_ignores": [],  # ["native:123:456", "custom:mcu:1726"] movies ignored for misplaced checks
     "collections_root_parent": "",  # Optional preset parent folder where new collection root folders are created
     "ignored_missing_folders": [],  # Configured folders deleted on an online drive that user chose to ignore
-    "ignored_folders": []  # Configured folders selectively ignored by the user (e.g. Waiting For / zz Missing)
+    "ignored_folders": [],  # Configured folders selectively ignored by the user (e.g. Waiting For / zz Missing)
+    "torrent_client_type": "none",  # "none", "qbittorrent", "transmission", "deluge"
+    "torrent_client_url": "",  # e.g. "http://127.0.0.1:8080"
+    "torrent_client_username": "",
+    "torrent_client_password": "",  # Decrypted in memory only; stored DPAPI-encrypted on disk
+    "skip_zero_kb_movies": True  # Optionally skip moving movies with 0 KB / no file on disk
 }
 
 LOG_LOCK = threading.Lock()
@@ -645,64 +658,210 @@ def normalise_collection_ignores(raw_list):
     return out
 
 
-def load_config():
-    """Loads config.json (BOM-safe), decrypting the Radarr API key into memory only."""
-    if os.path.exists(CONFIG_FILE):
+DEFAULT_ROUTING_SLOTS = [
+    {
+        "id": "slot:custom_collections",
+        "priority": 10,
+        "name": "Custom Collections (Tag / Curated Groups)",
+        "enabled": True,
+        "rule_type": "slot_custom_collections",
+        "criteria": {},
+        "target_root": ""
+    },
+    {
+        "id": "slot:multi_collections",
+        "priority": 20,
+        "name": "Native Collections (2+ Releases)",
+        "enabled": True,
+        "rule_type": "slot_multi_collections",
+        "criteria": {},
+        "target_root": ""
+    },
+    {
+        "id": "slot:single_collections",
+        "priority": 30,
+        "name": "Single-Release Collections (Only 1 Movie)",
+        "enabled": False,
+        "rule_type": "slot_single_collections",
+        "criteria": {},
+        "target_root": ""
+    }
+]
+
+
+def _get_db_conn():
+    """Opens a connection to Radarr Companion's own local SQLite database (never Radarr's DB)."""
+    conn = sqlite3.connect(DB_FILE, timeout=15.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def init_local_db():
+    """Initialises radarr_companion.db tables and migrates legacy config.json automatically."""
+    global DB_INITIALISED
+    with DB_LOCK:
+        conn = _get_db_conn()
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
-                data = json.load(f)
-
-            merged = dict(DEFAULT_CONFIG)
-            merged.update(data)
-            merged["log_retention_days"] = clamp_retention_days(merged.get("log_retention_days", 30))
-            merged.update(normalise_maintenance_config(merged))
-            merged["custom_collections"] = normalise_custom_collections(merged.get("custom_collections", []))
-            merged["collection_location_ignores"] = normalise_collection_ignores(merged.get("collection_location_ignores", []))
-            raw_coll_parent = str(merged.get("collections_root_parent") or "").strip()
-            merged["collections_root_parent"] = os.path.normpath(raw_coll_parent) if raw_coll_parent else ""
-            merged["ignored_missing_folders"] = [
-                os.path.normpath(str(p).strip())
-                for p in (merged.get("ignored_missing_folders") or [])
-                if str(p).strip()
-            ]
-            merged["ignored_folders"] = [
-                os.path.normpath(str(p).strip())
-                for p in (merged.get("ignored_folders") or [])
-                if str(p).strip()
-            ]
-
-            needs_migration = False
-            enc_key = str(data.get("radarr_api_key_encrypted") or "").strip()
-            legacy_plain = str(data.get("radarr_api_key") or "").strip()
-
-            if enc_key:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS kv_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS routing_rules (
+                    id TEXT PRIMARY KEY,
+                    priority INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    rule_type TEXT NOT NULL DEFAULT 'custom',
+                    criteria_json TEXT NOT NULL DEFAULT '{}',
+                    target_root TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS routing_ignores (
+                    tmdb_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            # Ensure default collection priority slots exist
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cur_rules = conn.execute("SELECT COUNT(*) FROM routing_rules").fetchone()[0]
+            if cur_rules == 0:
+                for slot in DEFAULT_ROUTING_SLOTS:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO routing_rules (id, priority, name, enabled, rule_type, criteria_json, target_root) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            slot["id"],
+                            slot["priority"],
+                            slot["name"],
+                            1 if slot["enabled"] else 0,
+                            slot["rule_type"],
+                            json.dumps(slot["criteria"]),
+                            slot["target_root"]
+                        )
+                    )
+            # One-time automatic migration from legacy config.json if kv_settings is empty
+            kv_count = conn.execute("SELECT COUNT(*) FROM kv_settings").fetchone()[0]
+            if kv_count == 0 and os.path.exists(CONFIG_FILE):
                 try:
-                    merged["radarr_api_key"] = dpapi_decrypt(enc_key)
+                    with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
+                        legacy = json.load(f)
+                    if isinstance(legacy, dict) and legacy:
+                        for k, v in legacy.items():
+                            conn.execute(
+                                "INSERT OR REPLACE INTO kv_settings (key, value_json, updated_at) VALUES (?, ?, ?)",
+                                (str(k), json.dumps(v), now_str)
+                            )
+                        conn.commit()
+                        bak_path = CONFIG_FILE + ".migrated.bak"
+                        if not os.path.exists(bak_path):
+                            shutil.copy2(CONFIG_FILE, bak_path)
+                        log_event(f"Migrated legacy config.json into local SQLite database ({DB_FILE}).", "INFO")
                 except Exception as exc:
-                    log_event(f"Could not decrypt saved Radarr API key (please re-enter it): {exc}", "WARN")
-                    merged["radarr_api_key"] = ""
-            elif legacy_plain:
-                merged["radarr_api_key"] = legacy_plain
-                needs_migration = True
-            else:
+                    log_event(f"Legacy config.json migration warning: {exc}", "WARN")
+            conn.commit()
+            DB_INITIALISED = True
+        finally:
+            conn.close()
+
+
+def load_config():
+    """Loads settings from local SQLite DB (radarr_companion.db), decrypting secrets into memory only."""
+    if not DB_INITIALISED or not os.path.exists(DB_FILE):
+        init_local_db()
+    try:
+        with DB_LOCK:
+            conn = _get_db_conn()
+            try:
+                rows = conn.execute("SELECT key, value_json FROM kv_settings").fetchall()
+            finally:
+                conn.close()
+        data = {}
+        for row in rows:
+            try:
+                data[row["key"]] = json.loads(row["value_json"])
+            except Exception:
+                pass
+
+        if not data:
+            return dict(DEFAULT_CONFIG)
+
+        merged = dict(DEFAULT_CONFIG)
+        merged.update(data)
+        merged["log_retention_days"] = clamp_retention_days(merged.get("log_retention_days", 30))
+        merged.update(normalise_maintenance_config(merged))
+        merged["custom_collections"] = normalise_custom_collections(merged.get("custom_collections", []))
+        merged["collection_location_ignores"] = normalise_collection_ignores(merged.get("collection_location_ignores", []))
+        raw_coll_parent = str(merged.get("collections_root_parent") or "").strip()
+        merged["collections_root_parent"] = os.path.normpath(raw_coll_parent) if raw_coll_parent else ""
+        merged["ignored_missing_folders"] = [
+            os.path.normpath(str(p).strip())
+            for p in (merged.get("ignored_missing_folders") or [])
+            if str(p).strip()
+        ]
+        merged["ignored_folders"] = [
+            os.path.normpath(str(p).strip())
+            for p in (merged.get("ignored_folders") or [])
+            if str(p).strip()
+        ]
+        merged["skip_zero_kb_movies"] = bool(merged.get("skip_zero_kb_movies", True))
+
+        needs_migration = False
+        enc_key = str(data.get("radarr_api_key_encrypted") or "").strip()
+        legacy_plain = str(data.get("radarr_api_key") or "").strip()
+
+        if enc_key:
+            try:
+                merged["radarr_api_key"] = dpapi_decrypt(enc_key)
+            except Exception as exc:
+                log_event(f"Could not decrypt saved Radarr API key (please re-enter it): {exc}", "WARN")
                 merged["radarr_api_key"] = ""
+        elif legacy_plain:
+            merged["radarr_api_key"] = legacy_plain
+            needs_migration = True
+        else:
+            merged["radarr_api_key"] = ""
 
-            merged.pop("radarr_api_key_encrypted", None)
+        merged.pop("radarr_api_key_encrypted", None)
 
-            if needs_migration:
-                log_event("Migrating legacy plaintext API key in config.json to Windows DPAPI encryption.", "INFO")
-                save_config(merged)
+        enc_tpass = str(data.get("torrent_client_password_encrypted") or "").strip()
+        if enc_tpass:
+            try:
+                merged["torrent_client_password"] = dpapi_decrypt(enc_tpass)
+            except Exception as exc:
+                log_event(f"Could not decrypt saved torrent client password (please re-enter it): {exc}", "WARN")
+                merged["torrent_client_password"] = ""
+        else:
+            merged["torrent_client_password"] = ""
+        merged.pop("torrent_client_password_encrypted", None)
 
-            return merged
-        except Exception as exc:
-            log_event(f"Failed to read {CONFIG_FILE}, using defaults: {exc}", "ERROR")
+        if needs_migration:
+            log_event("Migrating legacy plaintext API key to Windows DPAPI encryption in SQLite DB.", "INFO")
+            save_config(merged)
+
+        return merged
+    except Exception as exc:
+        log_event(f"Failed to read {DB_FILE}, using defaults: {exc}", "ERROR")
     return dict(DEFAULT_CONFIG)
 
 
 def save_config(cfg):
-    """Saves config.json atomically with the Radarr API key strictly encrypted via Windows DPAPI."""
+    """Saves settings atomically to local SQLite DB (radarr_companion.db) with secrets DPAPI-encrypted."""
+    if not DB_INITIALISED or not os.path.exists(DB_FILE):
+        init_local_db()
     plain_api_key = str(cfg.get("radarr_api_key") or "").strip()
     encrypted_api_key = dpapi_encrypt(plain_api_key) if plain_api_key else ""
+    plain_tpass = str(cfg.get("torrent_client_password") or "").strip()
+    encrypted_tpass = dpapi_encrypt(plain_tpass) if plain_tpass else ""
+    t_type = str(cfg.get("torrent_client_type") or "none").strip().lower()
+    if t_type not in ("none", "qbittorrent", "transmission", "deluge"):
+        t_type = "none"
+    t_url = str(cfg.get("torrent_client_url") or "").strip().rstrip("/")
+    t_user = str(cfg.get("torrent_client_username") or "").strip()
     retention_days = clamp_retention_days(cfg.get("log_retention_days", 30))
     maint = normalise_maintenance_config(cfg)
 
@@ -742,17 +901,34 @@ def save_config(cfg):
             os.path.normpath(str(p).strip())
             for p in (cfg.get("ignored_folders") or [])
             if str(p).strip()
-        ]
+        ],
+        "torrent_client_type": t_type,
+        "torrent_client_url": t_url,
+        "torrent_client_username": t_user,
+        "torrent_client_password_encrypted": encrypted_tpass,
+        "skip_zero_kb_movies": bool(cfg.get("skip_zero_kb_movies", True))
     }
 
-    tmp_cfg = CONFIG_FILE + ".tmp"
-    with open(tmp_cfg, "w", encoding="utf-8") as f:
-        json.dump(disk_payload, f, indent=4)
-    os.replace(tmp_cfg, CONFIG_FILE)
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with DB_LOCK:
+        conn = _get_db_conn()
+        try:
+            for k, v in disk_payload.items():
+                conn.execute(
+                    "INSERT OR REPLACE INTO kv_settings (key, value_json, updated_at) VALUES (?, ?, ?)",
+                    (k, json.dumps(v), now_str)
+                )
+            # Remove any legacy plaintext secret keys if present
+            conn.execute("DELETE FROM kv_settings WHERE key IN ('radarr_api_key', 'torrent_client_password')")
+            conn.commit()
+        finally:
+            conn.close()
 
     runtime_cfg = dict(disk_payload)
     runtime_cfg.pop("radarr_api_key_encrypted", None)
+    runtime_cfg.pop("torrent_client_password_encrypted", None)
     runtime_cfg["radarr_api_key"] = plain_api_key
+    runtime_cfg["torrent_client_password"] = plain_tpass
     return runtime_cfg
 
 
@@ -1663,12 +1839,238 @@ def render_radarr_filename(winner_item, movie_meta, naming_cfg):
     return f"{safe_stem}{ext}"
 
 
+# --- CONFIGURABLE TORRENT CLIENT SEEDING GUARD (qBittorrent / Transmission / Deluge) ---
+QBIT_INACTIVE_STATES = {"pausedup", "stoppedup", "pauseddl", "stoppeddl", "error", "missingfiles"}
+
+
+def _normalise_torrent_url(raw_url):
+    u = str(raw_url or "").strip().rstrip("/")
+    if u and not re.match(r"^https?://", u, re.IGNORECASE):
+        u = "http://" + u
+    return u
+
+
+def fetch_active_torrent_paths(cfg, timeout=6):
+    """
+    Queries the user's configured local torrent client (qBittorrent, Transmission, or Deluge)
+    for actively downloading or seeding torrents so files still being seeded are never moved
+    or disrupted while finishing their seeding ratio.
+    Returns (connected_bool, active_entries_list, detail_message).
+    """
+    client_type = str(cfg.get("torrent_client_type") or "none").strip().lower()
+    base_url = _normalise_torrent_url(cfg.get("torrent_client_url") or "")
+    username = str(cfg.get("torrent_client_username") or "").strip()
+    password = str(cfg.get("torrent_client_password") or "")
+
+    if client_type == "none" or not base_url:
+        return False, [], "No torrent client configured."
+
+    try:
+        if client_type == "qbittorrent":
+            cj = cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+            if username or password:
+                form_data = urllib.parse.urlencode({"username": username, "password": password}).encode("utf-8")
+                login_req = urllib.request.Request(
+                    f"{base_url}/api/v2/auth/login",
+                    data=form_data,
+                    headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": base_url},
+                    method="POST"
+                )
+                with opener.open(login_req, timeout=timeout) as resp:
+                    body = resp.read().decode("utf-8", errors="replace").strip()
+                    if body.lower() != "ok.":
+                        return False, [], f"qBittorrent login rejected: {body or 'check credentials'}"
+
+            info_req = urllib.request.Request(f"{base_url}/api/v2/torrents/info", method="GET")
+            with opener.open(info_req, timeout=timeout) as resp:
+                torrents = json.loads(resp.read().decode("utf-8") or "[]")
+
+            active = []
+            for t in (torrents or []):
+                state = str(t.get("state") or "").strip()
+                if state.lower() in QBIT_INACTIVE_STATES:
+                    continue
+                paths = []
+                cp = str(t.get("content_path") or "").strip()
+                sp = str(t.get("save_path") or "").strip()
+                tname = str(t.get("name") or "").strip()
+                if cp:
+                    paths.append(os.path.normpath(cp))
+                if sp and tname:
+                    joined = os.path.normpath(os.path.join(sp, tname))
+                    if joined not in paths:
+                        paths.append(joined)
+                if paths:
+                    active.append({
+                        "client": "qBittorrent",
+                        "name": tname,
+                        "state": state or "active",
+                        "ratio": round(float(t.get("ratio") or 0.0), 2),
+                        "paths": paths
+                    })
+            return True, active, f"Connected to qBittorrent ({len(torrents or [])} total, {len(active)} active/seeding)."
+
+        if client_type == "transmission":
+            rpc_url = base_url if base_url.lower().endswith("/transmission/rpc") else f"{base_url}/transmission/rpc"
+            headers = {"Content-Type": "application/json"}
+            if username or password:
+                tok = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+                headers["Authorization"] = f"Basic {tok}"
+            req_body = json.dumps({
+                "method": "torrent-get",
+                "arguments": {"fields": ["name", "downloadDir", "status", "uploadRatio"]}
+            }).encode("utf-8")
+
+            def _call_tx(hdrs):
+                r = urllib.request.Request(rpc_url, data=req_body, headers=hdrs, method="POST")
+                with urllib.request.urlopen(r, timeout=timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8") or "{}")
+
+            try:
+                data = _call_tx(headers)
+            except urllib.error.HTTPError as exc:
+                if exc.code == 409:
+                    sid = exc.headers.get("X-Transmission-Session-Id", "")
+                    if sid:
+                        headers["X-Transmission-Session-Id"] = sid
+                        data = _call_tx(headers)
+                    else:
+                        raise
+                else:
+                    raise
+
+            torrents = (data.get("arguments") or {}).get("torrents") or []
+            tx_states = {1: "checkWait", 2: "checking", 3: "downloadWait", 4: "downloading", 5: "seedWait", 6: "seeding"}
+            active = []
+            for t in torrents:
+                st_code = int(t.get("status") or 0)
+                if st_code == 0:  # 0 = stopped/paused
+                    continue
+                ddir = str(t.get("downloadDir") or "").strip()
+                tname = str(t.get("name") or "").strip()
+                if ddir and tname:
+                    active.append({
+                        "client": "Transmission",
+                        "name": tname,
+                        "state": tx_states.get(st_code, "active"),
+                        "ratio": round(float(t.get("uploadRatio") or 0.0), 2),
+                        "paths": [os.path.normpath(os.path.join(ddir, tname))]
+                    })
+            return True, active, f"Connected to Transmission ({len(torrents)} total, {len(active)} active/seeding)."
+
+        if client_type == "deluge":
+            rpc_url = base_url if base_url.lower().endswith("/json") else f"{base_url}/json"
+            cj = cookiejar.CookieJar()
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+            if password:
+                login_body = json.dumps({"id": 1, "method": "auth.login", "params": [password]}).encode("utf-8")
+                lreq = urllib.request.Request(rpc_url, data=login_body, headers={"Content-Type": "application/json"}, method="POST")
+                with opener.open(lreq, timeout=timeout) as resp:
+                    lres = json.loads(resp.read().decode("utf-8") or "{}")
+                    if not lres.get("result"):
+                        return False, [], "Deluge WebUI login failed (check password)."
+            q_body = json.dumps({
+                "id": 2,
+                "method": "core.get_torrents_status",
+                "params": [{}, ["name", "save_path", "state", "ratio"]]
+            }).encode("utf-8")
+            qreq = urllib.request.Request(rpc_url, data=q_body, headers={"Content-Type": "application/json"}, method="POST")
+            with opener.open(qreq, timeout=timeout) as resp:
+                qres = json.loads(resp.read().decode("utf-8") or "{}")
+            torrents = (qres.get("result") or {}) if isinstance(qres.get("result"), dict) else {}
+            active = []
+            for t in torrents.values():
+                st = str(t.get("state") or "")
+                if st.lower() in ("paused", "error"):
+                    continue
+                sp = str(t.get("save_path") or "").strip()
+                tname = str(t.get("name") or "").strip()
+                if sp and tname:
+                    active.append({
+                        "client": "Deluge",
+                        "name": tname,
+                        "state": st or "active",
+                        "ratio": round(float(t.get("ratio") or 0.0), 2),
+                        "paths": [os.path.normpath(os.path.join(sp, tname))]
+                    })
+            return True, active, f"Connected to Deluge ({len(torrents)} total, {len(active)} active/seeding)."
+
+        return False, [], f"Unsupported torrent client type: {client_type}"
+    except Exception as exc:
+        return False, [], f"Could not reach {client_type} at {base_url}: {exc}"
+
+
+def match_seeding_torrent(filepath, active_torrents):
+    """Returns matching active/seeding torrent dict if filepath belongs to an active torrent."""
+    if not filepath or not active_torrents:
+        return None
+    norm_f = os.path.normcase(os.path.abspath(str(filepath)))
+    for t in active_torrents:
+        for tp in (t.get("paths") or []):
+            norm_tp = os.path.normcase(os.path.abspath(str(tp)))
+            if norm_f == norm_tp or norm_f.startswith(norm_tp + os.sep):
+                return t
+    return None
+
+
+def is_running_as_admin():
+    """Returns True if the current process is running with Windows Administrator privileges."""
+    if os.name != "nt":
+        return os.geteuid() == 0 if hasattr(os, "geteuid") else True
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def relaunch_as_administrator():
+    """
+    Launches a new elevated (Administrator / UAC) instance of Radarr Companion via ShellExecuteW('runas').
+    Refuses if any active job is currently running so in-flight moves are never corrupted.
+    """
+    if os.name != "nt":
+        return False, "Administrator UAC relaunch is only supported on Windows."
+    if is_running_as_admin():
+        return True, "Radarr Companion is already running as Administrator."
+
+    with JOB_LOCK:
+        job_active = bool(JOB_STATE.get("active"))
+        job_name = JOB_STATE.get("job_name") or "Active Job"
+    with MAINTENANCE_LOCK:
+        maint_active = bool(MAINTENANCE_STATE.get("running"))
+    if job_active or maint_active:
+        return False, f"Cannot restart as Administrator while '{job_name}' is running. Wait for it to finish first."
+
+    try:
+        if getattr(sys, "frozen", False):
+            exe = sys.executable
+            params = "--no-browser"
+        else:
+            exe = sys.executable
+            script = os.path.abspath(__file__)
+            params = f'"{script}" --no-browser'
+        cwd = APP_DIR
+        rc_val = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, cwd, 1)
+        if rc_val <= 32:
+            return False, f"UAC elevation was cancelled or blocked by Windows (code {rc_val})."
+        log_event("Launched elevated Administrator instance via UAC; handing over port 8085...", "INFO")
+        return True, "UAC elevation approved! Starting elevated Administrator session (dashboard will refresh automatically)..."
+    except Exception as exc:
+        return False, f"Failed to launch elevated instance: {exc}"
+
+
 # --- MULTI-DRIVE DUPLICATE SCANNER ---
 def scan_all_drives(cfg):
     """Scans all online library and download folders, matching duplicates against Radarr TMDB IDs."""
     jid = begin_job("Drive Scan", "Indexing Radarr library and scanning online drives...", total=1)
     radarr_index = fetch_radarr_movie_index(cfg)
     naming_cfg = fetch_radarr_naming_config(cfg)
+    t_connected, active_torrents, t_msg = fetch_active_torrent_paths(cfg)
+    if t_connected:
+        log_event(f"Seeding Guard: {t_msg}", "INFO")
+    elif str(cfg.get("torrent_client_type") or "none").lower() != "none":
+        log_event(f"Seeding Guard warning: {t_msg}", "WARN")
 
     grouped = defaultdict(list)
     seen_paths = set()
@@ -1735,6 +2137,12 @@ def scan_all_drives(cfg):
                     if not group_key:
                         continue
 
+                    seeding_hit = match_seeding_torrent(full_path, active_torrents)
+                    seeding_label = (
+                        f"{seeding_hit['client']}: {seeding_hit['state']} (ratio {seeding_hit['ratio']})"
+                        if seeding_hit else ""
+                    )
+
                     grouped[group_key].append({
                         "path": full_path,
                         "filename": fname,
@@ -1745,7 +2153,9 @@ def scan_all_drives(cfg):
                         "display_name": display_name,
                         "movie_meta": movie_meta,
                         "radarr_movie_id": (movie_meta or {}).get("radarr_id"),
-                        "match_source": match_source
+                        "match_source": match_source,
+                        "seeding": bool(seeding_hit),
+                        "seeding_info": seeding_label
                     })
 
     if skipped_active_transfers > 0:
@@ -1772,7 +2182,7 @@ def scan_all_drives(cfg):
                 specs = inspect_media_file(single["path"])
                 item_copy = dict(single)
                 item_copy.update(specs)
-                item_copy["locked"] = is_file_locked(single["path"])
+                item_copy["locked"] = is_file_locked(single["path"]) or bool(item_copy.get("seeding"))
 
                 meta = item_copy.get("movie_meta") or {}
                 radarr_movie_id = item_copy.get("radarr_movie_id")
@@ -1826,7 +2236,7 @@ def scan_all_drives(cfg):
             specs = inspect_media_file(item["path"])
             item_copy = dict(item)
             item_copy.update(specs)
-            item_copy["locked"] = is_file_locked(item["path"])
+            item_copy["locked"] = is_file_locked(item["path"]) or bool(item_copy.get("seeding"))
             enriched.append(item_copy)
 
         enriched.sort(key=lambda x: (x["score"], 1 if x["role"] == "library" else 0, x["size_bytes"]), reverse=True)
@@ -2051,6 +2461,14 @@ def execute_intake_import(payload, cfg):
         return False, f"Source file no longer exists or drive is offline: {source_path}"
     if is_file_locked(source_path):
         return False, f"File is currently locked by another process (e.g. torrent client): {os.path.basename(source_path)}"
+    t_conn, active_torrents, _ = fetch_active_torrent_paths(cfg)
+    if t_conn:
+        seed_hit = match_seeding_torrent(source_path, active_torrents)
+        if seed_hit:
+            return False, (
+                f"Blocked: '{os.path.basename(source_path)}' is still actively seeding/downloading in "
+                f"{seed_hit['client']} ({seed_hit['state']}, ratio {seed_hit['ratio']}). Wait for seeding to finish."
+            )
 
     if staging_root and folder_name and payload.get("dest_source") != "Radarr DB Folder":
         final_folder = os.path.join(staging_root, folder_name)
@@ -3101,8 +3519,10 @@ def bulk_move_collection(payload, cfg):
 
     moved = 0
     already_there = 0
+    skipped_zero_kb = 0
     failed = []
     moved_records = []  # Collect successfully moved movies; update Radarr API strictly AFTER external disk moves finish
+    skip_zero_kb = bool(payload.get("skip_zero_kb_movies", cfg.get("skip_zero_kb_movies", True)))
 
     total_movies = len(movie_ids)
     jid = begin_job(
@@ -3121,9 +3541,18 @@ def bulk_move_collection(payload, cfg):
             continue
 
         title = m.get("title") or f"ID {mid}"
+        size_on_disk = int(m.get("sizeOnDisk") or 0)
         src_path = os.path.normpath(m.get("path") or "")
         folder_name = os.path.basename(src_path.rstrip("\\/")) if src_path else sanitise_windows_filename(f"{title} ({m.get('year') or ''})")
         dst_path = os.path.normpath(os.path.join(target_root, folder_name))
+
+        if skip_zero_kb and size_on_disk <= 0:
+            actual_bytes = _get_directory_size_bytes(src_path) if (src_path and os.path.isdir(win_long_path(src_path))) else 0
+            if actual_bytes <= 0:
+                skipped_zero_kb += 1
+                update_job_progress(overall_current=idx_m + 1, status=f"Skipped 0 KB movie: {title}")
+                log_event(f"Bulk Move [{collection_name}]: Skipped 0 KB movie '{title}' (no file on disk).", "INFO")
+                continue
 
         if src_path and os.path.normcase(os.path.abspath(src_path)) == os.path.normcase(os.path.abspath(dst_path)):
             already_there += 1
@@ -3184,10 +3613,11 @@ def bulk_move_collection(payload, cfg):
         except Exception as exc:
             log_event(f"Could not update native collection rootFolderPath in Radarr: {exc}", "WARN")
 
-    summary = f"Bulk move complete for '{collection_name}': {moved} moved, {already_there} already in destination" + (f", {len(failed)} failed." if failed else ".")
+    skip_note = f", {skipped_zero_kb} skipped (0 KB)" if skipped_zero_kb else ""
+    summary = f"Bulk move complete for '{collection_name}': {moved} moved, {already_there} already in destination{skip_note}" + (f", {len(failed)} failed." if failed else ".")
     finish_job(jid, summary, state="completed" if not failed else "warning")
     log_event(summary, "INFO" if not failed else "WARN")
-    return (len(failed) == 0), summary, {"moved": moved, "already_there": already_there, "failed": failed}
+    return (len(failed) == 0), summary, {"moved": moved, "already_there": already_there, "skipped_zero_kb": skipped_zero_kb, "failed": failed}
 
 
 def bulk_delete_collection(payload, cfg):
@@ -3562,6 +3992,575 @@ def delete_custom_collection_only(custom_id, cfg):
     save_config(cfg)
     log_event(f"Deleted custom collection definition '{custom_id}' (movies untouched).", "INFO")
     return True, "Custom collection removed (movie files & Radarr entries untouched)."
+
+
+# --- ROUTING FLOWS / RULES ENGINE & OPT-IN GITHUB UPDATE CHECK ---
+def _parse_version_tuple(ver_str):
+    nums = [int(x) for x in re.findall(r"\d+", str(ver_str or "0"))]
+    return tuple(nums) if nums else (0,)
+
+
+def check_github_update():
+    """
+    Opt-in check against GitHub (only triggered after explicit user confirmation).
+    Sends zero personal data; compares APP_VERSION against README.md on main.
+    """
+    repo_url = f"https://github.com/{GITHUB_REPO}"
+    raw_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/README.md"
+    try:
+        req = urllib.request.Request(
+            raw_url,
+            headers={"User-Agent": f"RadarrCompanion/{APP_VERSION}"},
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            readme_text = resp.read().decode("utf-8", errors="replace")
+        m = re.search(r"Radarr Companion\s*\(v([0-9]+(?:\.[0-9]+)*)\)", readme_text, re.IGNORECASE)
+        if not m:
+            return {
+                "ok": True,
+                "current_version": APP_VERSION,
+                "latest_version": APP_VERSION,
+                "update_available": False,
+                "repo_url": repo_url,
+                "message": f"Connected to GitHub, but could not parse latest version tag (current: v{APP_VERSION})."
+            }
+        latest = m.group(1)
+        is_newer = _parse_version_tuple(latest) > _parse_version_tuple(APP_VERSION)
+        if is_newer:
+            msg = f"Update available! Latest on GitHub: v{latest} (you are running v{APP_VERSION})."
+        else:
+            msg = f"You are up to date! Running v{APP_VERSION} (latest on GitHub: v{latest})."
+        log_event(f"GitHub Update Check: {msg}", "INFO")
+        return {
+            "ok": True,
+            "current_version": APP_VERSION,
+            "latest_version": latest,
+            "update_available": is_newer,
+            "repo_url": repo_url,
+            "message": msg
+        }
+    except Exception as exc:
+        log_event(f"GitHub Update Check failed: {exc}", "WARN")
+        return {
+            "ok": False,
+            "current_version": APP_VERSION,
+            "latest_version": "",
+            "update_available": False,
+            "repo_url": repo_url,
+            "message": f"Could not reach GitHub to check for updates: {exc}"
+        }
+
+
+def get_routing_rules():
+    """Returns all priority-ordered routing rules (including Collection priority slots) from SQLite."""
+    if not DB_INITIALISED or not os.path.exists(DB_FILE):
+        init_local_db()
+    with DB_LOCK:
+        conn = _get_db_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, priority, name, enabled, rule_type, criteria_json, target_root "
+                "FROM routing_rules ORDER BY priority ASC, name ASC"
+            ).fetchall()
+        finally:
+            conn.close()
+    rules = []
+    for r in rows:
+        try:
+            crit = json.loads(r["criteria_json"] or "{}")
+            if not isinstance(crit, dict):
+                crit = {}
+        except Exception:
+            crit = {}
+        rules.append({
+            "id": r["id"],
+            "priority": int(r["priority"]),
+            "name": r["name"],
+            "enabled": bool(r["enabled"]),
+            "rule_type": r["rule_type"],
+            "criteria": crit,
+            "target_root": r["target_root"] or ""
+        })
+    return rules
+
+
+def _split_csv_list(val):
+    if isinstance(val, list):
+        raw_items = [str(x).strip() for x in val]
+    else:
+        raw_items = [p.strip() for p in re.split(r"[,;]+", str(val or ""))]
+    seen = set()
+    out = []
+    for item in raw_items:
+        if item and item.lower() not in seen:
+            seen.add(item.lower())
+            out.append(item)
+    return out
+
+
+def save_routing_rule(payload):
+    """Creates or updates a routing rule or collection priority slot in SQLite."""
+    if not DB_INITIALISED or not os.path.exists(DB_FILE):
+        init_local_db()
+    rid = str(payload.get("id") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    rule_type = str(payload.get("rule_type") or "custom").strip().lower()
+    if rule_type not in ("custom", "slot_custom_collections", "slot_multi_collections", "slot_single_collections"):
+        rule_type = "custom"
+    if not name:
+        return False, "Rule name is required.", None
+    enabled = 1 if bool(payload.get("enabled", True)) else 0
+    raw_root = str(payload.get("target_root") or "").strip()
+    target_root = os.path.normpath(raw_root) if raw_root else ""
+
+    raw_crit = payload.get("criteria") if isinstance(payload.get("criteria"), dict) else {}
+    criteria = {
+        "genres": _split_csv_list(raw_crit.get("genres") if "genres" in raw_crit else payload.get("genres")),
+        "certifications": _split_csv_list(raw_crit.get("certifications") if "certifications" in raw_crit else payload.get("certifications")),
+        "languages": _split_csv_list(raw_crit.get("languages") if "languages" in raw_crit else payload.get("languages")),
+        "tags": _split_csv_list(raw_crit.get("tags") if "tags" in raw_crit else payload.get("tags")),
+        "year_min": str(raw_crit.get("year_min") if "year_min" in raw_crit else (payload.get("year_min") or "")).strip(),
+        "year_max": str(raw_crit.get("year_max") if "year_max" in raw_crit else (payload.get("year_max") or "")).strip(),
+        "source": str(raw_crit.get("source") or "").strip()
+    }
+    if rule_type != "custom":
+        criteria = {}
+
+    with DB_LOCK:
+        conn = _get_db_conn()
+        try:
+            existing = conn.execute("SELECT priority, rule_type FROM routing_rules WHERE id = ?", (rid,)).fetchone() if rid else None
+            if existing:
+                priority = int(payload.get("priority")) if str(payload.get("priority") or "").isdigit() else int(existing["priority"])
+                rule_type = existing["rule_type"]
+            else:
+                if not rid:
+                    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "rule"
+                    rid = f"rule:{slug}-{int(time.time() * 1000) % 100000}"
+                max_p = conn.execute("SELECT COALESCE(MAX(priority), 0) FROM routing_rules").fetchone()[0]
+                priority = int(payload.get("priority")) if str(payload.get("priority") or "").isdigit() else int(max_p) + 10
+
+            conn.execute(
+                "INSERT OR REPLACE INTO routing_rules (id, priority, name, enabled, rule_type, criteria_json, target_root) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (rid, priority, name, enabled, rule_type, json.dumps(criteria), target_root)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    log_event(f"Routing Rules: Saved rule '{name}' (priority {priority}).", "INFO")
+    return True, f"Saved routing rule '{name}'.", get_routing_rules()
+
+
+def delete_routing_rule(rule_id):
+    """Deletes a custom routing rule from SQLite (built-in collection slots cannot be deleted, only disabled)."""
+    rid = str(rule_id or "").strip()
+    if not rid:
+        return False, "Missing rule ID."
+    if rid.startswith("slot:"):
+        return False, "Built-in Collection priority slots cannot be deleted — disable them instead."
+    with DB_LOCK:
+        conn = _get_db_conn()
+        try:
+            cur = conn.execute("DELETE FROM routing_rules WHERE id = ?", (rid,))
+            conn.commit()
+            if cur.rowcount == 0:
+                return False, "Routing rule not found."
+        finally:
+            conn.close()
+    log_event(f"Routing Rules: Deleted rule '{rid}'.", "INFO")
+    return True, "Routing rule deleted."
+
+
+def reorder_routing_rule(rule_id, direction):
+    """Moves a routing rule up or down in priority order inside SQLite."""
+    rid = str(rule_id or "").strip()
+    direction = str(direction or "").strip().lower()
+    if direction not in ("up", "down"):
+        return False, "Invalid reorder direction."
+    rules = get_routing_rules()
+    idx = next((i for i, r in enumerate(rules) if r["id"] == rid), -1)
+    if idx < 0:
+        return False, "Rule not found."
+    swap_idx = idx - 1 if direction == "up" else idx + 1
+    if swap_idx < 0 or swap_idx >= len(rules):
+        return True, "Rule is already at the boundary."
+    rules[idx], rules[swap_idx] = rules[swap_idx], rules[idx]
+    with DB_LOCK:
+        conn = _get_db_conn()
+        try:
+            for pos, r in enumerate(rules):
+                conn.execute("UPDATE routing_rules SET priority = ? WHERE id = ?", ((pos + 1) * 10, r["id"]))
+            conn.commit()
+        finally:
+            conn.close()
+    return True, f"Updated priority order for '{rules[swap_idx]['name']}'."
+
+
+def get_routing_ignores():
+    if not DB_INITIALISED or not os.path.exists(DB_FILE):
+        init_local_db()
+    with DB_LOCK:
+        conn = _get_db_conn()
+        try:
+            rows = conn.execute("SELECT tmdb_id, title FROM routing_ignores").fetchall()
+        finally:
+            conn.close()
+    return {str(r["tmdb_id"]): r["title"] for r in rows}
+
+
+def toggle_routing_ignore(tmdb_id, title="", ignore_flag=True):
+    tid = str(tmdb_id or "").strip()
+    if not tid:
+        return False, "Missing TMDB ID."
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with DB_LOCK:
+        conn = _get_db_conn()
+        try:
+            if ignore_flag:
+                conn.execute(
+                    "INSERT OR REPLACE INTO routing_ignores (tmdb_id, title, created_at) VALUES (?, ?, ?)",
+                    (tid, str(title or tid), now_str)
+                )
+                msg = f"Ignored '{title or tid}' in Routing Flows."
+            else:
+                conn.execute("DELETE FROM routing_ignores WHERE tmdb_id = ?", (tid,))
+                msg = f"Restored '{title or tid}' in Routing Flows."
+            conn.commit()
+        finally:
+            conn.close()
+    log_event(f"Routing Flows: {msg}", "INFO")
+    return True, msg
+
+
+def import_radarr_custom_filters(cfg):
+    """
+    Imports Radarr's saved movie Custom Filters (/api/v3/customfilter) into routing_rules
+    as editable starting flow rules.
+    """
+    if not cfg.get("radarr_url") or not cfg.get("radarr_api_key"):
+        return False, "Configure Radarr URL & API Key in Settings first.", []
+    try:
+        _, raw_filters = radarr_api_request(cfg, "/api/v3/customfilter", method="GET", timeout=10)
+        try:
+            _, raw_tags = radarr_api_request(cfg, "/api/v3/tag", method="GET", timeout=8)
+        except Exception:
+            raw_tags = []
+        tag_id_to_label = {str(t.get("id")): str(t.get("label") or "").strip() for t in (raw_tags or []) if t.get("id") is not None}
+
+        movie_filters = [f for f in (raw_filters or []) if str(f.get("type") or "").lower() in ("movie", "movies", "")]
+        if not movie_filters:
+            return True, "No saved movie custom filters found in Radarr (/api/v3/customfilter).", get_routing_rules()
+
+        imported = 0
+        existing_by_id = {r["id"]: r for r in get_routing_rules()}
+        for cf in movie_filters:
+            cf_id = cf.get("id")
+            label = str(cf.get("label") or f"Radarr Filter {cf_id}").strip()
+            rid = f"radarr-filter:{cf_id}" if cf_id is not None else f"radarr-filter:{re.sub(r'[^a-z0-9]+', '-', label.lower()).strip('-')}"
+
+            genres = []
+            certs = []
+            langs = []
+            tags = []
+            year_min = ""
+            year_max = ""
+            for cond in (cf.get("filters") or []):
+                ckey = str(cond.get("key") or "").strip().lower()
+                ctype = str(cond.get("type") or "").strip().lower()
+                cval = cond.get("value")
+                vals = cval if isinstance(cval, list) else ([cval] if cval is not None else [])
+                str_vals = [str(v).strip() for v in vals if str(v).strip()]
+                if ckey == "genres":
+                    genres.extend(str_vals)
+                elif ckey == "certification":
+                    certs.extend(str_vals)
+                elif ckey in ("originallanguage", "languages"):
+                    langs.extend(str_vals)
+                elif ckey == "tags":
+                    for sv in str_vals:
+                        tags.append(tag_id_to_label.get(sv, sv))
+                elif ckey == "year" and str_vals:
+                    if "less" in ctype:
+                        year_max = str_vals[0]
+                    elif "greater" in ctype:
+                        year_min = str_vals[0]
+                    else:
+                        year_min = year_max = str_vals[0]
+
+            prev = existing_by_id.get(rid)
+            save_routing_rule({
+                "id": rid,
+                "name": f"[Radarr] {label}" if not label.startswith("[Radarr]") else label,
+                "enabled": prev["enabled"] if prev else True,
+                "rule_type": "custom",
+                "target_root": prev["target_root"] if prev else "",
+                "priority": prev["priority"] if prev else None,
+                "criteria": {
+                    "genres": genres,
+                    "certifications": certs,
+                    "languages": langs,
+                    "tags": tags,
+                    "year_min": year_min,
+                    "year_max": year_max,
+                    "source": "radarr_customfilter"
+                }
+            })
+            imported += 1
+
+        msg = f"Imported {imported} movie filter(s) from Radarr (/api/v3/customfilter). Assign a Target Root Folder to activate each rule."
+        log_event(f"Routing Rules: {msg}", "INFO")
+        return True, msg, get_routing_rules()
+    except Exception as exc:
+        log_event(f"Failed to import Radarr custom filters: {exc}", "WARN")
+        return False, f"Could not import Radarr custom filters: {exc}", get_routing_rules()
+
+
+def _movie_matches_custom_rule(mv, criteria, tag_id_to_label):
+    """Returns True if Radarr movie dict matches all non-empty criteria of a custom routing rule."""
+    req_genres = [g.lower() for g in (criteria.get("genres") or [])]
+    req_certs = [c.lower() for c in (criteria.get("certifications") or [])]
+    req_langs = [l.lower() for l in (criteria.get("languages") or [])]
+    req_tags = [t.lower() for t in (criteria.get("tags") or [])]
+    year_min = str(criteria.get("year_min") or "").strip()
+    year_max = str(criteria.get("year_max") or "").strip()
+
+    if not any([req_genres, req_certs, req_langs, req_tags, year_min, year_max]):
+        return False
+
+    mv_genres = {str(g).strip().lower() for g in (mv.get("genres") or []) if str(g).strip()}
+    if req_genres and not all(g in mv_genres for g in req_genres):
+        return False
+
+    mv_cert = str(mv.get("certification") or "").strip().lower()
+    if req_certs and mv_cert not in req_certs:
+        return False
+
+    orig_lang = mv.get("originalLanguage")
+    mv_lang = (str(orig_lang.get("name") or "") if isinstance(orig_lang, dict) else str(orig_lang or "")).strip().lower()
+    if req_langs and not any(rl == mv_lang or rl in mv_lang for rl in req_langs):
+        return False
+
+    mv_tags = {tag_id_to_label.get(str(tid), "").lower() for tid in (mv.get("tags") or [])}
+    if req_tags and not any(rt in mv_tags for rt in req_tags):
+        return False
+
+    mv_year = int(mv.get("year") or 0)
+    if year_min.isdigit() and mv_year and mv_year < int(year_min):
+        return False
+    if year_max.isdigit() and mv_year and mv_year > int(year_max):
+        return False
+
+    return True
+
+
+def evaluate_routing_preview(cfg):
+    """
+    Evaluates all Radarr movies against priority-ordered routing_rules (top = highest priority).
+    Respects ignored_folders, skip_zero_kb_movies, and routing_ignores.
+    """
+    rules = get_routing_rules()
+    ignores = get_routing_ignores()
+    if not cfg.get("radarr_url") or not cfg.get("radarr_api_key"):
+        return {
+            "connected": False,
+            "error": "Radarr API not configured.",
+            "rules": rules,
+            "matches": [],
+            "skipped_zero_kb": 0,
+            "ignored_count": 0
+        }
+
+    try:
+        _, raw_movies = radarr_api_request(cfg, "/api/v3/movie", method="GET", timeout=15)
+        try:
+            _, raw_colls = radarr_api_request(cfg, "/api/v3/collection", method="GET", timeout=10)
+        except Exception:
+            raw_colls = []
+        try:
+            _, raw_tags = radarr_api_request(cfg, "/api/v3/tag", method="GET", timeout=8)
+        except Exception:
+            raw_tags = []
+
+        tag_id_to_label = {str(t.get("id")): str(t.get("label") or "").strip() for t in (raw_tags or []) if t.get("id") is not None}
+        tag_label_to_id = {v.lower(): int(k) for k, v in tag_id_to_label.items() if k.isdigit() and v}
+
+        # Map custom collections: tmdb_id -> (coll_name, root_folder)
+        custom_defs = normalise_custom_collections(cfg.get("custom_collections", []))
+        custom_map = {}
+        for cd in custom_defs:
+            c_root = str(cd.get("root_folder") or "").strip()
+            if not c_root:
+                continue
+            cd_tags = cd.get("radarr_tags") or ([cd["radarr_tag"]] if cd.get("radarr_tag") else [])
+            cd_tag_ids = {tag_label_to_id[tl.lower()] for tl in cd_tags if tl.lower() in tag_label_to_id}
+            for tid in (cd.get("tmdb_ids") or []):
+                custom_map[str(tid)] = (cd["name"], os.path.normpath(c_root))
+            if cd_tag_ids:
+                for mv in (raw_movies or []):
+                    mtid = str(mv.get("tmdbId") or "")
+                    if mtid and any(t in cd_tag_ids for t in (mv.get("tags") or [])):
+                        custom_map[mtid] = (cd["name"], os.path.normpath(c_root))
+
+        # Map native collections: coll_tmdb -> {name, root_folder, count}
+        native_coll_info = {}
+        for c in (raw_colls or []):
+            ctid = str(c.get("tmdbId") or "")
+            if ctid:
+                native_coll_info[ctid] = {
+                    "name": c.get("title") or f"Collection {ctid}",
+                    "root_folder": os.path.normpath(c.get("rootFolderPath") or "") if c.get("rootFolderPath") else "",
+                    "count": 0
+                }
+        for mv in (raw_movies or []):
+            coll = mv.get("collection") or {}
+            ctid = str(coll.get("tmdbId") or "")
+            if ctid:
+                if ctid not in native_coll_info:
+                    native_coll_info[ctid] = {"name": coll.get("title") or f"Collection {ctid}", "root_folder": "", "count": 0}
+                native_coll_info[ctid]["count"] += 1
+
+        ignored_folders_norm = {
+            os.path.normcase(os.path.normpath(p))
+            for p in (cfg.get("ignored_folders") or [])
+            if str(p).strip()
+        }
+        skip_zero_kb = bool(cfg.get("skip_zero_kb_movies", True))
+        enabled_rules = [r for r in rules if r["enabled"]]
+
+        matches = []
+        skipped_zero_kb = 0
+        ignored_count = 0
+
+        for mv in (raw_movies or []):
+            cur_root = os.path.normpath(mv.get("rootFolderPath") or "") if mv.get("rootFolderPath") else ""
+            if cur_root and os.path.normcase(cur_root) in ignored_folders_norm:
+                continue
+
+            size_bytes = int(mv.get("sizeOnDisk") or 0)
+            if skip_zero_kb and size_bytes <= 0:
+                skipped_zero_kb += 1
+                continue
+
+            mtid = str(mv.get("tmdbId") or "")
+            coll = mv.get("collection") or {}
+            ctid = str(coll.get("tmdbId") or "")
+            ninfo = native_coll_info.get(ctid) if ctid else None
+
+            matched_rule = None
+            target_root = ""
+
+            for rule in enabled_rules:
+                rtype = rule["rule_type"]
+                if rtype == "slot_custom_collections":
+                    if mtid in custom_map:
+                        cname, croot = custom_map[mtid]
+                        matched_rule = f"Custom Collection: {cname}"
+                        target_root = croot
+                        break
+                elif rtype == "slot_multi_collections":
+                    if ninfo and ninfo["count"] >= 2:
+                        troot = ninfo["root_folder"] or rule["target_root"]
+                        if troot:
+                            matched_rule = f"Multi-Movie Collection: {ninfo['name']} ({ninfo['count']})"
+                            target_root = os.path.normpath(troot)
+                            break
+                elif rtype == "slot_single_collections":
+                    if ninfo and ninfo["count"] == 1:
+                        troot = rule["target_root"] or ninfo["root_folder"]
+                        if troot:
+                            matched_rule = f"Single-Release Collection: {ninfo['name']}"
+                            target_root = os.path.normpath(troot)
+                            break
+                else:
+                    if rule["target_root"] and _movie_matches_custom_rule(mv, rule["criteria"], tag_id_to_label):
+                        matched_rule = rule["name"]
+                        target_root = os.path.normpath(rule["target_root"])
+                        break
+
+            if not matched_rule or not target_root:
+                continue
+
+            cur_norm = os.path.normcase(os.path.abspath(cur_root)) if cur_root else ""
+            tgt_norm = os.path.normcase(os.path.abspath(target_root))
+            if cur_norm == tgt_norm:
+                continue
+
+            is_ignored = mtid in ignores
+            if is_ignored:
+                ignored_count += 1
+
+            matches.append({
+                "movie_id": mv.get("id"),
+                "tmdb_id": mtid,
+                "title": mv.get("title") or "",
+                "year": mv.get("year") or "",
+                "size_gb": round(size_bytes / (1024 ** 3), 2),
+                "current_root": cur_root,
+                "current_path": os.path.normpath(mv.get("path") or "") if mv.get("path") else "",
+                "matched_rule": matched_rule,
+                "target_root": target_root,
+                "ignored": is_ignored
+            })
+
+        matches.sort(key=lambda x: (x["ignored"], x["matched_rule"].lower(), x["title"].lower()))
+        return {
+            "connected": True,
+            "rules": rules,
+            "matches": matches,
+            "actionable_count": sum(1 for m in matches if not m["ignored"]),
+            "skipped_zero_kb": skipped_zero_kb,
+            "ignored_count": ignored_count,
+            "skip_zero_kb_movies": skip_zero_kb
+        }
+    except Exception as exc:
+        log_event(f"Routing preview failed: {exc}", "WARN")
+        return {
+            "connected": False,
+            "error": str(exc),
+            "rules": rules,
+            "matches": [],
+            "skipped_zero_kb": 0,
+            "ignored_count": 0
+        }
+
+
+def apply_routing_moves(payload, cfg):
+    """Applies one or more routing moves by grouping movie IDs per target_root via bulk_move_collection."""
+    items = payload.get("items") or []
+    if not items:
+        return False, "No movies selected to move."
+    by_root = defaultdict(list)
+    for it in items:
+        mid = it.get("movie_id")
+        troot = str(it.get("target_root") or "").strip()
+        if str(mid).isdigit() and troot:
+            by_root[os.path.normpath(troot)].append(int(mid))
+    if not by_root:
+        return False, "No valid movie/target pairs supplied."
+
+    total_moved = 0
+    total_skipped_zero = 0
+    errors = []
+    for troot, mids in by_root.items():
+        ok, msg, detail = bulk_move_collection({
+            "collection_name": f"Routing Flow -> {os.path.basename(troot) or troot}",
+            "collection_id": None,
+            "movie_ids": mids,
+            "target_root_folder": troot,
+            "create_if_missing": True,
+            "skip_zero_kb_movies": cfg.get("skip_zero_kb_movies", True)
+        }, cfg)
+        total_moved += int(detail.get("moved", 0))
+        total_skipped_zero += int(detail.get("skipped_zero_kb", 0))
+        if not ok:
+            errors.append(msg)
+
+    skip_txt = f", {total_skipped_zero} skipped (0 KB)" if total_skipped_zero else ""
+    summary = f"Routing apply complete: {total_moved} movie(s) moved{skip_txt}" + (f" | Warnings: {'; '.join(errors)}" if errors else ".")
+    return (len(errors) == 0), summary
 
 
 # --- LIBRARY MAINTENANCE MODULE (SPINNING HDD MOVIE DEFRAG VIA SYSINTERNALS CONTIG) ---
@@ -4107,6 +5106,15 @@ def _run_defrag_worker(cfg, trigger_source="manual"):
 
 def start_maintenance_run(cfg, trigger_source="manual"):
     """Starts a background spinning-HDD defragmentation run if one is not already active."""
+    if os.name == "nt" and not is_running_as_admin():
+        msg = (
+            "Administrator privileges are required to defragment NTFS files "
+            "(Sysinternals contig64.exe and Windows defrag.exe return 'Access is denied' as a standard user). "
+            "Click 'Restart as Administrator (UAC)' first."
+        )
+        log_event(f"Library Maintenance blocked: {msg}", "WARN")
+        return False, msg
+
     engine_type, engine_exe = resolve_defrag_engine(cfg)
     if not engine_type or not engine_exe:
         return False, "Neither Sysinternals contig64.exe nor Windows built-in defrag.exe was found."
@@ -4155,6 +5163,7 @@ def get_maintenance_status_payload(cfg, force_refresh_drives=False):
             state_copy["last_run_at"] = cfg.get("maintenance_last_run")
 
     return {
+        "is_admin": is_running_as_admin(),
         "enabled": bool(cfg.get("maintenance_enabled", False)),
         "schedule": cfg.get("maintenance_schedule", "weekly"),
         "day_of_week": cfg.get("maintenance_day_of_week", "Sunday"),
@@ -4287,10 +5296,15 @@ class CompanionHandler(BaseHTTPRequestHandler):
             safe_cfg = dict(cfg)
             safe_cfg["has_api_key"] = bool(cfg.get("radarr_api_key"))
             safe_cfg["radarr_api_key"] = ""
+            safe_cfg["has_torrent_password"] = bool(cfg.get("torrent_client_password"))
+            safe_cfg["torrent_client_password"] = ""
+            safe_cfg["is_admin"] = is_running_as_admin()
             safe_cfg["log_file_path"] = LOG_FILE
             safe_cfg["folder_status"] = get_folder_statuses(cfg)
             safe_cfg["server_instance_id"] = SERVER_INSTANCE_ID
             safe_cfg["server_pid"] = os.getpid()
+            safe_cfg["app_version"] = APP_VERSION
+            safe_cfg["db_file_path"] = DB_FILE
             safe_cfg["capabilities"] = {
                 "pymediainfo": HAS_MEDIAINFO,
                 "send2trash": HAS_SEND2TRASH
@@ -4320,6 +5334,15 @@ class CompanionHandler(BaseHTTPRequestHandler):
         if self.path == "/api/quarantine":
             cfg = load_config()
             self._send_json(list_quarantined_items(cfg))
+            return
+
+        if self.path == "/api/routing/rules":
+            self._send_json({"ok": True, "rules": get_routing_rules()})
+            return
+
+        if self.path == "/api/routing/preview":
+            cfg = load_config()
+            self._send_json(evaluate_routing_preview(cfg))
             return
 
         if self.path == "/api/job_status":
@@ -4360,6 +5383,11 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     incoming["radarr_api_key"] = ""
                 elif not str(incoming.get("radarr_api_key") or "").strip():
                     incoming["radarr_api_key"] = current.get("radarr_api_key", "")
+                if not str(incoming.get("torrent_client_password") or "").strip():
+                    incoming["torrent_client_password"] = current.get("torrent_client_password", "")
+                for t_key in ("torrent_client_type", "torrent_client_url", "torrent_client_username"):
+                    if t_key not in incoming:
+                        incoming[t_key] = current.get(t_key, DEFAULT_CONFIG[t_key])
                 if "staging_folder" not in incoming:
                     incoming["staging_folder"] = current.get("staging_folder", "")
                 if "cached_naming_format" not in incoming:
@@ -4379,7 +5407,8 @@ class CompanionHandler(BaseHTTPRequestHandler):
                     "custom_collections",
                     "collection_location_ignores",
                     "ignored_missing_folders",
-                    "ignored_folders"
+                    "ignored_folders",
+                    "skip_zero_kb_movies"
                 ):
                     if maint_key not in incoming:
                         incoming[maint_key] = current.get(maint_key, DEFAULT_CONFIG[maint_key])
@@ -4439,6 +5468,70 @@ class CompanionHandler(BaseHTTPRequestHandler):
                 })
             except Exception as exc:
                 self._send_json({"ok": False, "message": f"Connection failed: {exc}"})
+            return
+
+        if self.path == "/api/test_torrent_client":
+            cfg = load_config()
+            payload = self._read_json()
+            test_cfg = dict(cfg)
+            if payload.get("torrent_client_type"):
+                test_cfg["torrent_client_type"] = payload["torrent_client_type"]
+            if "torrent_client_url" in payload:
+                test_cfg["torrent_client_url"] = payload["torrent_client_url"]
+            if "torrent_client_username" in payload:
+                test_cfg["torrent_client_username"] = payload["torrent_client_username"]
+            if str(payload.get("torrent_client_password") or "").strip():
+                test_cfg["torrent_client_password"] = payload["torrent_client_password"]
+            ok, active, msg = fetch_active_torrent_paths(test_cfg)
+            log_event(f"Torrent client test: {msg}", "INFO" if ok else "WARN")
+            self._send_json({"ok": ok, "active_count": len(active), "message": msg})
+            return
+
+        if self.path == "/api/relaunch_admin":
+            ok, msg = relaunch_as_administrator()
+            self._send_json({"ok": ok, "message": msg}, status=200 if ok else 400)
+            return
+
+        if self.path == "/api/check_update":
+            res = check_github_update()
+            self._send_json(res, status=200 if res.get("ok") else 502)
+            return
+
+        if self.path == "/api/routing/rules/save":
+            payload = self._read_json()
+            ok, msg, rules = save_routing_rule(payload)
+            self._send_json({"ok": ok, "message": msg, "rules": rules}, status=200 if ok else 400)
+            return
+
+        if self.path == "/api/routing/rules/delete":
+            payload = self._read_json()
+            ok, msg = delete_routing_rule(payload.get("id"))
+            self._send_json({"ok": ok, "message": msg, "rules": get_routing_rules()}, status=200 if ok else 400)
+            return
+
+        if self.path == "/api/routing/rules/reorder":
+            payload = self._read_json()
+            ok, msg = reorder_routing_rule(payload.get("id"), payload.get("direction"))
+            self._send_json({"ok": ok, "message": msg, "rules": get_routing_rules()}, status=200 if ok else 400)
+            return
+
+        if self.path == "/api/routing/import_radarr_filters":
+            cfg = load_config()
+            ok, msg, rules = import_radarr_custom_filters(cfg)
+            self._send_json({"ok": ok, "message": msg, "rules": rules}, status=200 if ok else 400)
+            return
+
+        if self.path == "/api/routing/ignore":
+            payload = self._read_json()
+            ok, msg = toggle_routing_ignore(payload.get("tmdb_id"), payload.get("title", ""), bool(payload.get("ignore", True)))
+            self._send_json({"ok": ok, "message": msg}, status=200 if ok else 400)
+            return
+
+        if self.path == "/api/routing/apply":
+            cfg = load_config()
+            payload = self._read_json()
+            ok, msg = apply_routing_moves(payload, cfg)
+            self._send_json({"ok": ok, "message": msg}, status=200 if ok else 400)
             return
 
         if self.path == "/api/sync_root_folders":
@@ -5212,10 +6305,10 @@ def terminate_old_companion_sessions(dashboard_url, prompt_fn=None):
 
 
 if __name__ == "__main__":
-    if not os.path.exists(CONFIG_FILE):
+    init_local_db()
+    startup_cfg = load_config()
+    if not os.path.exists(DB_FILE):
         startup_cfg = save_config(DEFAULT_CONFIG)
-    else:
-        startup_cfg = load_config()
 
     removed_old, _ = trim_log_file(startup_cfg.get("log_retention_days", 30))
     dashboard_url = f"http://{HTTP_HOST}:{HTTP_PORT}"
@@ -5251,7 +6344,7 @@ if __name__ == "__main__":
         "INFO"
     )
     log_event(
-        f"Config loaded from {CONFIG_FILE} | Library folders: {len(startup_cfg['library_folders'])} | "
+        f"Config loaded from SQLite DB ({DB_FILE}) | Library folders: {len(startup_cfg['library_folders'])} | "
         f"Download folders: {len(startup_cfg['download_folders'])} | "
         f"Radarr Key: {'Loaded' if startup_cfg['radarr_api_key'] else 'Not Set'}",
         "INFO"

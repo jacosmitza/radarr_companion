@@ -2,9 +2,13 @@
 # Date: 2026-11-25
 # Radarr Companion — Git Ignore Rules
 
-# Local user configuration & secrets (DPAPI-encrypted API keys, personal paths, custom collections)
+# Local user configuration, SQLite database & secrets (DPAPI-encrypted API keys, personal paths, custom collections)
 config.json
 config.json.tmp
+config.json.migrated.bak
+radarr_companion.db
+radarr_companion.db-wal
+radarr_companion.db-shm
 
 # Runtime activity logs & temporary files
 radarr_companion.log
@@ -35,6 +39,9 @@ env/
 build/
 dist/
 *.spec.bak
+
+# Local GitHub request triage database (local-only: comments, handles, notes, prompts)
+request_db/
 
 # Windows & IDE metadata
 Thumbs.db

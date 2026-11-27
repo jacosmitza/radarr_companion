@@ -697,7 +697,7 @@
             <span class="brand-logo" aria-hidden="true">R</span>
             <div>
                 <span class="brand-text">Radarr</span>
-                <span class="brand-sub">Companion v1.5</span>
+                <span class="brand-sub">Companion v2.0</span>
             </div>
         </div>
         <nav class="sidebar-nav" aria-label="Primary sections">
@@ -707,6 +707,9 @@
             </button>
             <button type="button" class="sidebar-item" id="openCollectionsBtn">
                 <span>Collections</span>
+            </button>
+            <button type="button" class="sidebar-item" id="openRoutingBtn">
+                <span>Routing Flows</span>
             </button>
             <button type="button" class="sidebar-item" id="openLibraryBtn">
                 <span>Library &amp; Drives</span>
@@ -730,6 +733,9 @@
             </button>
             <button type="button" class="sidebar-item" id="openSettingsBtn">
                 <span>Settings</span>
+            </button>
+            <button type="button" class="sidebar-item" id="openUpdateCheckBtn">
+                <span>Check Updates</span>
             </button>
         </nav>
         <div class="sidebar-footer">
@@ -866,6 +872,11 @@
                     <input type="checkbox" id="autoRenameToggle" checked>
                     <span><strong>Feature 2:</strong> Auto-rename promoted files to match Radarr's naming format</span>
                 </label>
+
+                <label class="check-label" for="skipZeroKbToggle" style="color:var(--muted); font-size:12px;">
+                    <input type="checkbox" id="skipZeroKbToggle" checked>
+                    <span><strong>Skip 0 KB Movies:</strong> Ignore missing / unreleased movies with 0 KB on disk when moving</span>
+                </label>
             </div>
             <div>
                 <label class="field-label" for="quarantineMode">Inferior Duplicate Safety Mode</label>
@@ -883,6 +894,43 @@
 
                 <label class="field-label">Active Radarr Naming Format (<code>/api/v3/config/naming</code>)</label>
                 <div id="namingFormatDisplay" class="naming-box">Not synced yet — click Test Connection</div>
+            </div>
+        </div>
+
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border);">
+            <h4 style="margin:0 0 8px 0; font-size:13px; color:var(--accent);">Torrent Client — Seeding Protection (Optional)</h4>
+            <p style="font-size:12px; color:var(--muted); margin:0 0 10px 0;">
+                Configure your local torrent client WebUI so Radarr Companion detects files that are still actively seeding or downloading in your intake folder and waits instead of moving them.
+            </p>
+            <div class="grid-2">
+                <div>
+                    <label class="field-label" for="torrentClientType">Torrent Client</label>
+                    <div class="input-row">
+                        <select id="torrentClientType">
+                            <option value="none">Disabled (File-lock check only)</option>
+                            <option value="qbittorrent">qBittorrent (WebUI API v2)</option>
+                            <option value="transmission">Transmission (RPC)</option>
+                            <option value="deluge">Deluge (Web JSON-RPC)</option>
+                        </select>
+                    </div>
+
+                    <label class="field-label" for="torrentClientUrl">Torrent WebUI URL (e.g. http://127.0.0.1:8080)</label>
+                    <div class="input-row">
+                        <input type="text" id="torrentClientUrl" placeholder="http://127.0.0.1:8080">
+                    </div>
+                </div>
+                <div>
+                    <label class="field-label" for="torrentClientUsername">Username (optional if localhost auth bypassed)</label>
+                    <div class="input-row">
+                        <input type="text" id="torrentClientUsername" autocomplete="off" placeholder="Optional username">
+                    </div>
+
+                    <label class="field-label" for="torrentClientPassword">Password (DPAPI-encrypted in config.json)</label>
+                    <div class="input-row">
+                        <input type="password" id="torrentClientPassword" autocomplete="off" placeholder="Optional password (leave blank to keep saved)">
+                        <button type="button" class="btn-secondary btn-sm" id="testTorrentBtn" style="white-space:nowrap;">Test Torrent</button>
+                    </div>
+                </div>
             </div>
         </div>
         <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; margin-top:16px; padding-top:14px; border-top:1px solid var(--border);">
@@ -1009,7 +1057,7 @@
         </form>
 
         <section class="card" style="background:var(--bg);" aria-label="Drive eligibility and maintenance status">
-            <h2>Drive Eligibility &amp; Live Status</h2>
+            <h2>Drive Eligibility &amp; Live Status <span id="maintAdminBadge" class="badge badge-warn">Checking Admin...</span></h2>
             <div style="font-size:12px; color:var(--muted); margin-bottom:10px;">
                 <div>Next Scheduled Run: <strong id="maintNextRun" style="color:var(--text);">Disabled</strong></div>
                 <div>Last Completed Run: <strong id="maintLastRun" style="color:var(--text);">Never</strong></div>
@@ -1020,8 +1068,9 @@
                 <progress id="maintProgressBar" class="maint-progress" value="0" max="1" style="display:none;"></progress>
             </div>
 
-            <div style="display:flex; gap:8px; margin-bottom:14px;">
+            <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
                 <button type="button" id="maintRunNowBtn" class="btn-amber">Run HDD Defrag Now</button>
+                <button type="button" id="relaunchAdminBtn" class="btn-secondary" style="display:none;" title="Restart Radarr Companion with Windows Administrator (UAC) elevation required for NTFS defragmentation">Restart as Administrator (UAC)</button>
                 <button type="button" id="maintStopBtn" class="btn-danger" style="display:none; padding:9px 14px; font-size:13px;">Stop After Current File</button>
             </div>
 
@@ -1225,6 +1274,117 @@
             <button type="button" class="btn-secondary" id="pathBrowserCancelBtn">Cancel</button>
             <button type="button" class="btn-green" id="pathBrowserConfirmBtn" disabled>Select This Folder</button>
         </div>
+    </div>
+</dialog>
+
+<!-- 6d. ROUTING FLOWS / RULES DIALOG -->
+<dialog id="routingModal" class="app-dialog modal-xl" aria-labelledby="routingModalTitle">
+    <div class="modal-header">
+        <h3 id="routingModalTitle" style="color:var(--accent);">Routing Flows &amp; Rules — Priority-Ordered Movie Organiser</h3>
+        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+            <button type="button" class="btn-secondary btn-sm" id="importRadarrFiltersBtn" title="Import saved movie Custom Filters from Radarr (/api/v3/customfilter) as starting rules">Import Radarr Filters</button>
+            <button type="button" class="btn-amber btn-sm" id="runRoutingPreviewBtn">Run Dry-Run Preview</button>
+            <button type="button" class="btn-green btn-sm" id="applyAllRoutingBtn" disabled>Move All Misplaced (0)</button>
+            <button type="button" class="btn-secondary btn-sm" data-close-dialog="routingModal">Close</button>
+        </div>
+    </div>
+    <p style="font-size:12px; color:var(--muted); margin:0 0 10px 0;">
+        Rules are evaluated from <strong>top to bottom (first match wins)</strong>. Move the built-in <strong>Collection Priority Slots</strong> (Custom Collections, Multi-Movie Collections, Single-Release Collections) above or below your normal genre/rating/language rules to control which wins.
+    </p>
+    <output id="routingStatus" class="status-output" style="display:block; margin-bottom:10px;" aria-live="polite"></output>
+
+    <div class="grid-2" style="align-items:start;">
+        <section class="card" style="background:var(--bg);" aria-label="Priority-ordered routing rules">
+            <h2>Priority-Ordered Rules &amp; Collection Slots</h2>
+            <ul id="routingRulesList" class="folder-list" style="max-height:280px; margin-bottom:14px;"></ul>
+
+            <form id="routingRuleForm" style="border-top:1px solid var(--border); padding-top:12px;">
+                <h4 id="routingFormHeading" style="margin:0 0 8px 0; font-size:13px; color:var(--accent);">Add / Edit Routing Rule</h4>
+                <input type="hidden" id="routingRuleId" value="">
+                <input type="hidden" id="routingRuleType" value="custom">
+
+                <label class="field-label" for="routingRuleName">Rule Name</label>
+                <div class="input-row">
+                    <input type="text" id="routingRuleName" placeholder="e.g. R-Rated Horror, Afrikaanse Flieks, Golden Oldies" required>
+                </div>
+
+                <label class="field-label" for="routingRuleTargetRoot">Target Root Folder (leave blank for Collection Slots to use each collection's own root)</label>
+                <div class="input-row">
+                    <input type="text" id="routingRuleTargetRoot" placeholder="e.g. E:\R_Horror or N:\Media\Movies\Movies Collections (Single Movies)">
+                    <button type="button" class="btn-secondary btn-sm" id="browseRoutingRootBtn">Browse...</button>
+                </div>
+
+                <div id="routingCustomCriteriaWrap">
+                    <div class="grid-2" style="gap:8px;">
+                        <div>
+                            <label class="field-label" for="routingRuleGenres">Genres (comma-separated, all must match)</label>
+                            <div class="input-row"><input type="text" id="routingRuleGenres" placeholder="e.g. Comedy, Romance"></div>
+                        </div>
+                        <div>
+                            <label class="field-label" for="routingRuleCerts">Certifications / Ratings (any matches)</label>
+                            <div class="input-row"><input type="text" id="routingRuleCerts" placeholder="e.g. R, NC-17 or G, PG"></div>
+                        </div>
+                    </div>
+                    <div class="grid-2" style="gap:8px;">
+                        <div>
+                            <label class="field-label" for="routingRuleLangs">Original Language(s)</label>
+                            <div class="input-row"><input type="text" id="routingRuleLangs" placeholder="e.g. Afrikaans"></div>
+                        </div>
+                        <div>
+                            <label class="field-label" for="routingRuleTags">Radarr Tag(s)</label>
+                            <div class="input-row"><input type="text" id="routingRuleTags" placeholder="e.g. kids, christian"></div>
+                        </div>
+                    </div>
+                    <div class="grid-2" style="gap:8px;">
+                        <div>
+                            <label class="field-label" for="routingRuleYearMin">Min Year (optional)</label>
+                            <div class="input-row"><input type="number" id="routingRuleYearMin" placeholder="e.g. 1900"></div>
+                        </div>
+                        <div>
+                            <label class="field-label" for="routingRuleYearMax">Max Year (optional)</label>
+                            <div class="input-row"><input type="number" id="routingRuleYearMax" placeholder="e.g. 1985"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <label class="check-label" for="routingRuleEnabled" style="font-size:12px; color:var(--muted); margin-bottom:10px;">
+                    <input type="checkbox" id="routingRuleEnabled" checked>
+                    <span>Rule Enabled</span>
+                </label>
+
+                <div style="display:flex; gap:8px;">
+                    <button type="submit" class="btn-green btn-sm">Save Rule</button>
+                    <button type="button" class="btn-secondary btn-sm" id="resetRoutingFormBtn">New / Reset</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="card" style="background:var(--bg);" aria-label="Routing dry-run preview">
+            <h2>Dry-Run Preview <span id="routingPreviewBadge" class="badge badge-drive">Not run yet</span></h2>
+            <div id="routingPreviewSummary" style="font-size:12px; color:var(--muted); margin-bottom:10px;">
+                Click <strong>Run Dry-Run Preview</strong> to evaluate your library against the ordered rules above.
+            </div>
+            <ul id="routingPreviewList" class="folder-list" style="max-height:560px;"></ul>
+        </section>
+    </div>
+</dialog>
+
+<!-- 6e. OPT-IN GITHUB UPDATE CHECK DIALOG -->
+<dialog id="updateCheckModal" class="app-dialog modal-sm" aria-labelledby="updateCheckTitle">
+    <div class="modal-header">
+        <h3 id="updateCheckTitle" style="color:var(--accent);">Check for Updates on GitHub</h3>
+        <button type="button" class="btn-secondary btn-sm" data-close-dialog="updateCheckModal">Close</button>
+    </div>
+    <p style="font-size:13px; color:var(--muted); margin:0 0 12px 0;">
+        Radarr Companion stays <strong>100% offline by default</strong> and never phones home automatically.
+        Confirm below to make a single read-only check against <code>github.com/jacosmitza/radarr_companion</code> (no personal data is sent).
+    </p>
+    <div id="updateCheckResult" class="naming-box" style="margin-bottom:12px; color:var(--text);">
+        Current Version: <strong>v2.0</strong> — Ready to check.
+    </div>
+    <div style="display:flex; justify-content:flex-end; gap:8px; padding-top:10px; border-top:1px solid var(--border);">
+        <button type="button" class="btn-secondary" data-close-dialog="updateCheckModal">Cancel</button>
+        <button type="button" class="btn-green" id="confirmCheckUpdateBtn">Check GitHub Now</button>
     </div>
 </dialog>
 
@@ -1695,7 +1855,11 @@
         appConfig.radarr_url = data.radarr_url || "http://127.0.0.1:7878";
         appConfig.quarantine_mode = data.quarantine_mode || "recycle_bin";
         appConfig.auto_rename_promoted = data.auto_rename_promoted !== false;
+        appConfig.skip_zero_kb_movies = data.skip_zero_kb_movies !== false;
         appConfig.log_retention_days = data.log_retention_days || 30;
+        appConfig.torrent_client_type = data.torrent_client_type || "none";
+        appConfig.torrent_client_url = data.torrent_client_url || "";
+        appConfig.torrent_client_username = data.torrent_client_username || "";
 
         document.getElementById("radarrUrl").value = appConfig.radarr_url;
         document.getElementById("radarrApiKey").placeholder = data.has_api_key
@@ -1703,7 +1867,14 @@
             : "Enter Radarr API Key";
         document.getElementById("quarantineMode").value = appConfig.quarantine_mode;
         document.getElementById("autoRenameToggle").checked = appConfig.auto_rename_promoted;
+        document.getElementById("skipZeroKbToggle").checked = appConfig.skip_zero_kb_movies;
         document.getElementById("logRetentionDays").value = appConfig.log_retention_days;
+        document.getElementById("torrentClientType").value = appConfig.torrent_client_type;
+        document.getElementById("torrentClientUrl").value = appConfig.torrent_client_url;
+        document.getElementById("torrentClientUsername").value = appConfig.torrent_client_username;
+        document.getElementById("torrentClientPassword").placeholder = data.has_torrent_password
+            ? "Encrypted & Saved (leave blank to keep)"
+            : "Optional password (leave blank to keep saved)";
 
         if (data.cached_naming_format) {
             document.getElementById("namingFormatDisplay").innerText = data.cached_naming_format;
@@ -2116,18 +2287,27 @@
         appConfig.radarr_url = document.getElementById("radarrUrl").value.trim();
         appConfig.quarantine_mode = document.getElementById("quarantineMode").value;
         appConfig.auto_rename_promoted = document.getElementById("autoRenameToggle").checked;
+        appConfig.skip_zero_kb_movies = document.getElementById("skipZeroKbToggle").checked;
         appConfig.log_retention_days = parseInt(document.getElementById("logRetentionDays").value, 10) || 30;
+        appConfig.torrent_client_type = document.getElementById("torrentClientType").value || "none";
+        appConfig.torrent_client_url = document.getElementById("torrentClientUrl").value.trim();
+        appConfig.torrent_client_username = document.getElementById("torrentClientUsername").value.trim();
         const apiKeyVal = document.getElementById("radarrApiKey").value.trim();
+        const torrentPassVal = document.getElementById("torrentClientPassword").value.trim();
 
         const res = await fetch("/api/config", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...appConfig, radarr_api_key: apiKeyVal })
+            body: JSON.stringify({ ...appConfig, radarr_api_key: apiKeyVal, torrent_client_password: torrentPassVal })
         });
         const data = await res.json();
         const statusEl = document.getElementById("settingsStatus");
 
         if (data.ok) {
+            if (torrentPassVal) {
+                document.getElementById("torrentClientPassword").value = "";
+                document.getElementById("torrentClientPassword").placeholder = "Encrypted & Saved (leave blank to keep)";
+            }
             if (apiKeyVal) {
                 document.getElementById("radarrApiKey").value = "";
                 document.getElementById("radarrApiKey").placeholder = "Encrypted & Saved (leave blank to keep)";
@@ -2151,6 +2331,347 @@
             statusEl.innerText = data.message || "Failed to save settings.";
         }
         refreshLogs();
+    }
+
+    async function testTorrentClient() {
+        const statusEl = document.getElementById("settingsStatus");
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = "Testing torrent client connection...";
+        try {
+            const res = await fetch("/api/test_torrent_client", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    torrent_client_type: document.getElementById("torrentClientType").value,
+                    torrent_client_url: document.getElementById("torrentClientUrl").value.trim(),
+                    torrent_client_username: document.getElementById("torrentClientUsername").value.trim(),
+                    torrent_client_password: document.getElementById("torrentClientPassword").value.trim()
+                })
+            });
+            const data = await res.json();
+            statusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+            statusEl.innerText = data.message || (data.ok ? "Connected." : "Connection failed.");
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Torrent test failed: ${err.message}`;
+        } finally {
+            refreshLogs();
+        }
+    }
+
+    async function relaunchAsAdmin() {
+        const fb = document.getElementById("maintFeedback");
+        const btn = document.getElementById("relaunchAdminBtn");
+        if (btn) btn.disabled = true;
+        fb.style.color = "var(--accent)";
+        fb.innerText = "Requesting Windows Administrator elevation (check UAC prompt)...";
+        try {
+            const res = await fetch("/api/relaunch_admin", { method: "POST" });
+            const data = await res.json();
+            fb.style.color = data.ok ? "var(--green)" : "var(--red)";
+            fb.innerText = data.message || (data.ok ? "Restarting as Administrator..." : "Elevation failed.");
+        } catch (err) {
+            fb.style.color = "var(--red)";
+            fb.innerText = `Elevation failed: ${err.message}`;
+        } finally {
+            if (btn) btn.disabled = false;
+            refreshLogs();
+        }
+    }
+
+    // --- ROUTING FLOWS / RULES ENGINE & OPT-IN UPDATE CHECK ---
+    let routingRulesCache = [];
+    let routingPreviewMatches = [];
+
+    function openRoutingModal() {
+        openDialog("routingModal");
+        loadRoutingRules();
+    }
+
+    async function loadRoutingRules() {
+        const statusEl = document.getElementById("routingStatus");
+        statusEl.style.color = "var(--muted)";
+        statusEl.innerText = "Loading routing rules from local SQLite database...";
+        try {
+            const res = await fetch("/api/routing/rules");
+            const data = await res.json();
+            routingRulesCache = data.rules || [];
+            renderRoutingRulesList();
+            statusEl.style.color = "var(--green)";
+            statusEl.innerText = `Loaded ${routingRulesCache.length} priority-ordered routing rule(s).`;
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Failed to load routing rules: ${err.message}`;
+        }
+    }
+
+    function renderRoutingRulesList() {
+        const ul = document.getElementById("routingRulesList");
+        if (!ul) return;
+        if (routingRulesCache.length === 0) {
+            ul.innerHTML = `<li style="color:var(--muted); font-size:13px;">No routing rules configured yet.</li>`;
+            return;
+        }
+        ul.innerHTML = routingRulesCache.map((r, idx) => {
+            const isSlot = r.rule_type !== "custom";
+            const badge = isSlot
+                ? `<span class="badge badge-warn">COLLECTION SLOT</span>`
+                : `<span class="badge badge-drive">RULE</span>`;
+            const crit = r.criteria || {};
+            const critParts = [];
+            if (crit.genres && crit.genres.length) critParts.push(`Genres: ${crit.genres.join(", ")}`);
+            if (crit.certifications && crit.certifications.length) critParts.push(`Rating: ${crit.certifications.join("/")}`);
+            if (crit.languages && crit.languages.length) critParts.push(`Lang: ${crit.languages.join(", ")}`);
+            if (crit.tags && crit.tags.length) critParts.push(`Tags: ${crit.tags.join(", ")}`);
+            if (crit.year_min || crit.year_max) critParts.push(`Year: ${crit.year_min || "*"}–${crit.year_max || "*"}`);
+            const subLine = isSlot
+                ? (r.target_root ? `Fallback/Target Root: ${r.target_root}` : "Uses each collection's configured root folder")
+                : `${critParts.join(" | ") || "No criteria set"} &rarr; ${r.target_root || "(No target root set)"}`;
+
+            return `
+                <li class="folder-item" style="${r.enabled ? "" : "opacity:0.55;"}">
+                    <div style="min-width:0; flex:1;">
+                        <div>
+                            <span class="badge badge-drive">#${idx + 1}</span>
+                            ${badge}
+                            <strong style="margin-left:4px;">${escapeHtml(r.name)}</strong>
+                            ${r.enabled ? '<span class="badge badge-online" style="margin-left:4px;">ON</span>' : '<span class="badge badge-offline" style="margin-left:4px;">OFF</span>'}
+                        </div>
+                        <div style="font-size:11px; color:var(--muted); margin-top:3px; font-family:Consolas, monospace; word-break:break-all;">${subLine}</div>
+                    </div>
+                    <div style="display:flex; gap:4px; flex-shrink:0; flex-wrap:wrap;">
+                        <button type="button" class="btn-secondary btn-sm" data-routing-move="${escapeHtml(r.id)}" data-dir="up" ${idx === 0 ? "disabled" : ""} title="Move higher priority">&uarr;</button>
+                        <button type="button" class="btn-secondary btn-sm" data-routing-move="${escapeHtml(r.id)}" data-dir="down" ${idx === routingRulesCache.length - 1 ? "disabled" : ""} title="Move lower priority">&darr;</button>
+                        <button type="button" class="btn-secondary btn-sm" data-routing-edit="${escapeHtml(r.id)}">Edit</button>
+                        ${isSlot ? "" : `<button type="button" class="btn-danger btn-sm" data-routing-delete="${escapeHtml(r.id)}">Del</button>`}
+                    </div>
+                </li>
+            `;
+        }).join("");
+    }
+
+    function resetRoutingRuleForm() {
+        document.getElementById("routingFormHeading").innerText = "Add / Edit Routing Rule";
+        document.getElementById("routingRuleId").value = "";
+        document.getElementById("routingRuleType").value = "custom";
+        document.getElementById("routingRuleName").value = "";
+        document.getElementById("routingRuleTargetRoot").value = "";
+        document.getElementById("routingRuleGenres").value = "";
+        document.getElementById("routingRuleCerts").value = "";
+        document.getElementById("routingRuleLangs").value = "";
+        document.getElementById("routingRuleTags").value = "";
+        document.getElementById("routingRuleYearMin").value = "";
+        document.getElementById("routingRuleYearMax").value = "";
+        document.getElementById("routingRuleEnabled").checked = true;
+        document.getElementById("routingCustomCriteriaWrap").style.display = "block";
+    }
+
+    function editRoutingRule(ruleId) {
+        const r = routingRulesCache.find(x => x.id === ruleId);
+        if (!r) return;
+        const isSlot = r.rule_type !== "custom";
+        const c = r.criteria || {};
+        document.getElementById("routingFormHeading").innerText = isSlot ? `Edit Collection Slot: ${r.name}` : `Edit Rule: ${r.name}`;
+        document.getElementById("routingRuleId").value = r.id;
+        document.getElementById("routingRuleType").value = r.rule_type;
+        document.getElementById("routingRuleName").value = r.name;
+        document.getElementById("routingRuleTargetRoot").value = r.target_root || "";
+        document.getElementById("routingRuleGenres").value = (c.genres || []).join(", ");
+        document.getElementById("routingRuleCerts").value = (c.certifications || []).join(", ");
+        document.getElementById("routingRuleLangs").value = (c.languages || []).join(", ");
+        document.getElementById("routingRuleTags").value = (c.tags || []).join(", ");
+        document.getElementById("routingRuleYearMin").value = c.year_min || "";
+        document.getElementById("routingRuleYearMax").value = c.year_max || "";
+        document.getElementById("routingRuleEnabled").checked = Boolean(r.enabled);
+        document.getElementById("routingCustomCriteriaWrap").style.display = isSlot ? "none" : "block";
+    }
+
+    async function saveRoutingRuleForm() {
+        const statusEl = document.getElementById("routingStatus");
+        const payload = {
+            id: document.getElementById("routingRuleId").value.trim(),
+            rule_type: document.getElementById("routingRuleType").value || "custom",
+            name: document.getElementById("routingRuleName").value.trim(),
+            target_root: document.getElementById("routingRuleTargetRoot").value.trim(),
+            enabled: document.getElementById("routingRuleEnabled").checked,
+            genres: document.getElementById("routingRuleGenres").value.trim(),
+            certifications: document.getElementById("routingRuleCerts").value.trim(),
+            languages: document.getElementById("routingRuleLangs").value.trim(),
+            tags: document.getElementById("routingRuleTags").value.trim(),
+            year_min: document.getElementById("routingRuleYearMin").value.trim(),
+            year_max: document.getElementById("routingRuleYearMax").value.trim()
+        };
+        const res = await fetch("/api/routing/rules/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        statusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+        statusEl.innerText = data.message;
+        if (data.ok) {
+            routingRulesCache = data.rules || [];
+            resetRoutingRuleForm();
+            renderRoutingRulesList();
+        }
+        refreshLogs();
+    }
+
+    async function reorderRoutingRuleUI(ruleId, dir) {
+        const res = await fetch("/api/routing/rules/reorder", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: ruleId, direction: dir })
+        });
+        const data = await res.json();
+        if (data.ok) {
+            routingRulesCache = data.rules || [];
+            renderRoutingRulesList();
+        }
+    }
+
+    async function deleteRoutingRuleUI(ruleId) {
+        const statusEl = document.getElementById("routingStatus");
+        const res = await fetch("/api/routing/rules/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: ruleId })
+        });
+        const data = await res.json();
+        statusEl.style.color = data.ok ? "var(--amber)" : "var(--red)";
+        statusEl.innerText = data.message;
+        if (data.ok) {
+            routingRulesCache = data.rules || [];
+            renderRoutingRulesList();
+        }
+        refreshLogs();
+    }
+
+    async function importRadarrFiltersUI() {
+        const statusEl = document.getElementById("routingStatus");
+        statusEl.style.color = "var(--accent)";
+        statusEl.innerText = "Importing saved movie Custom Filters from Radarr (/api/v3/customfilter)...";
+        try {
+            const res = await fetch("/api/routing/import_radarr_filters", { method: "POST" });
+            const data = await res.json();
+            statusEl.style.color = data.ok ? "var(--green)" : "var(--red)";
+            statusEl.innerText = data.message;
+            if (data.rules) {
+                routingRulesCache = data.rules;
+                renderRoutingRulesList();
+            }
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Import failed: ${err.message}`;
+        } finally {
+            refreshLogs();
+        }
+    }
+
+    async function runRoutingPreviewUI() {
+        const statusEl = document.getElementById("routingStatus");
+        const badgeEl = document.getElementById("routingPreviewBadge");
+        const summaryEl = document.getElementById("routingPreviewSummary");
+        const ul = document.getElementById("routingPreviewList");
+        const applyAllBtn = document.getElementById("applyAllRoutingBtn");
+
+        statusEl.style.color = "var(--accent)";
+        statusEl.innerText = "Evaluating Radarr movie library against priority-ordered rules...";
+        try {
+            const res = await fetch("/api/routing/preview");
+            const data = await res.json();
+            if (!data.connected) {
+                statusEl.style.color = "var(--red)";
+                statusEl.innerText = data.error || "Radarr not connected.";
+                return;
+            }
+            routingPreviewMatches = data.matches || [];
+            const actionable = routingPreviewMatches.filter(m => !m.ignored);
+            badgeEl.innerText = `${actionable.length} to move`;
+            summaryEl.innerText = `${actionable.length} actionable move(s) | ${data.ignored_count || 0} ignored | ${data.skipped_zero_kb || 0} skipped (0 KB).`;
+            applyAllBtn.disabled = actionable.length === 0;
+            applyAllBtn.innerText = `Move All Misplaced (${actionable.length})`;
+
+            if (routingPreviewMatches.length === 0) {
+                ul.innerHTML = `<li style="color:var(--green); font-size:13px;">All evaluated movies are already in their matching target root folders!</li>`;
+            } else {
+                ul.innerHTML = routingPreviewMatches.map((m, i) => `
+                    <li class="folder-item" style="flex-direction:column; align-items:stretch; gap:5px; ${m.ignored ? "opacity:0.55;" : ""}">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                            <div>
+                                <strong>${escapeHtml(m.title)} (${escapeHtml(m.year)})</strong>
+                                <span class="badge badge-drive" style="margin-left:4px;">${m.size_gb} GB</span>
+                                <span class="badge badge-online" style="margin-left:4px;">${escapeHtml(m.matched_rule)}</span>
+                                ${m.ignored ? '<span class="badge badge-warn" style="margin-left:4px;">IGNORED</span>' : ""}
+                            </div>
+                            <div style="display:flex; gap:6px; flex-shrink:0;">
+                                <button type="button" class="btn-secondary btn-sm" data-routing-ignore="${escapeHtml(m.tmdb_id)}" data-ignore-val="${m.ignored ? "0" : "1"}" data-ignore-title="${escapeHtml(m.title)}">${m.ignored ? "Restore" : "Ignore"}</button>
+                                ${m.ignored ? "" : `<button type="button" class="btn-green btn-sm" data-routing-apply-one="${i}">Move</button>`}
+                            </div>
+                        </div>
+                        <div style="font-size:11px; color:var(--muted); font-family:Consolas, monospace; word-break:break-all;">
+                            From: ${escapeHtml(m.current_root || m.current_path)} &rarr; <span style="color:var(--accent);">${escapeHtml(m.target_root)}</span>
+                        </div>
+                    </li>
+                `).join("");
+            }
+            statusEl.style.color = "var(--green)";
+            statusEl.innerText = `Dry-run preview complete: ${actionable.length} movie(s) matched for relocation.`;
+        } catch (err) {
+            statusEl.style.color = "var(--red)";
+            statusEl.innerText = `Preview failed: ${err.message}`;
+        }
+    }
+
+    async function applyRoutingItemsUI(items, triggerBtn) {
+        const statusEl = document.getElementById("routingStatus");
+        const res = await fetch("/api/routing/apply", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items })
+        });
+        const data = await res.json();
+        statusEl.style.color = data.ok ? "var(--green)" : "var(--amber)";
+        statusEl.innerText = data.message;
+        await runRoutingPreviewUI();
+        refreshLogs();
+    }
+
+    async function toggleRoutingIgnoreUI(tmdbId, ignoreFlag, title) {
+        await fetch("/api/routing/ignore", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tmdb_id: tmdbId, ignore: ignoreFlag, title })
+        });
+        await runRoutingPreviewUI();
+    }
+
+    function openUpdateCheckModal() {
+        document.getElementById("updateCheckResult").innerHTML = "Current Version: <strong>v2.0</strong> — Click <strong>Check GitHub Now</strong> to compare against the latest release.";
+        openDialog("updateCheckModal");
+    }
+
+    async function runGitHubUpdateCheck() {
+        const box = document.getElementById("updateCheckResult");
+        const btn = document.getElementById("confirmCheckUpdateBtn");
+        btn.disabled = true;
+        box.style.color = "var(--accent)";
+        box.innerText = "Checking github.com/jacosmitza/radarr_companion...";
+        try {
+            const res = await fetch("/api/check_update", { method: "POST" });
+            const data = await res.json();
+            box.style.color = data.ok ? (data.update_available ? "var(--amber)" : "var(--green)") : "var(--red)";
+            const linkHtml = data.repo_url
+                ? ` <a href="${escapeHtml(data.repo_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent); text-decoration:underline;">Open GitHub</a>`
+                : "";
+            box.innerHTML = `${escapeHtml(data.message || "Check complete.")}${linkHtml}`;
+        } catch (err) {
+            box.style.color = "var(--red)";
+            box.innerText = `Update check failed: ${err.message}`;
+        } finally {
+            btn.disabled = false;
+            refreshLogs();
+        }
     }
 
     async function clearSavedApiKey() {
@@ -2587,11 +3108,11 @@
                     <div class="file-row winner">
                         <div>
                             <span class="badge badge-drive">${escapeHtml(s.drive)}</span>
-                            ${s.locked ? '<span class="badge badge-warn">LOCKED</span>' : '<span class="badge badge-online">READY</span>'}
+                            ${s.seeding ? '<span class="badge badge-warn" title="Actively seeding/downloading in torrent client">SEEDING</span>' : (s.locked ? '<span class="badge badge-warn">LOCKED</span>' : '<span class="badge badge-online">READY</span>')}
                         </div>
                         <div>
                             <div class="file-path">[INTAKE] ${escapeHtml(s.path)}</div>
-                            <div class="file-specs">${escapeHtml(s.summary)} <span style="color:var(--muted);">(${escapeHtml(s.method)})</span></div>
+                            <div class="file-specs">${escapeHtml(s.summary)} <span style="color:var(--muted);">(${escapeHtml(s.method)})</span>${s.seeding_info ? ` &bull; <span style="color:var(--amber);">${escapeHtml(s.seeding_info)}</span>` : ""}</div>
                         </div>
                         <div class="score-pill" style="color:var(--accent);">Score ${s.score}</div>
                     </div>
@@ -2609,7 +3130,7 @@
                         <div style="display:flex; gap:8px;">
                             <button type="button" class="btn-secondary btn-sm" id="intake-skip-${idx}" data-skip-intake="${idx}" ${lockedOrDone ? "disabled" : ""}>Skip</button>
                             <button type="button" class="btn-green" id="intake-exec-${idx}" data-exec-intake="${idx}" ${lockedOrDone ? "disabled" : ""}>
-                                ${s.locked ? "File Locked" : (state === "done" ? "Imported" : "Import to Staging")}
+                                ${s.seeding ? "Seeding (Waiting)" : (s.locked ? "File Locked" : (state === "done" ? "Imported" : "Import to Staging"))}
                             </button>
                         </div>
                     </div>
@@ -2754,6 +3275,20 @@
 
     function renderMaintenanceUI(data, populateInputs = false) {
         const maintBadge = document.getElementById("maintBadge");
+        const adminBadge = document.getElementById("maintAdminBadge");
+        const relaunchBtn = document.getElementById("relaunchAdminBtn");
+        if (adminBadge) {
+            if (data.is_admin) {
+                adminBadge.className = "badge badge-online";
+                adminBadge.innerText = "Admin: Elevated";
+            } else {
+                adminBadge.className = "badge badge-offline";
+                adminBadge.innerText = "Admin: Standard User (Elevation Required)";
+            }
+        }
+        if (relaunchBtn) {
+            relaunchBtn.style.display = data.is_admin ? "none" : "inline-block";
+        }
         const st = data.state || {};
         if (st.running) {
             maintBadge.className = "badge badge-warn";
@@ -3910,6 +4445,53 @@
         });
         document.getElementById("openLibraryBtn").addEventListener("click", () => openDialog("libraryModal"));
         document.getElementById("openCollectionsBtn").addEventListener("click", openCollectionsModal);
+        document.getElementById("openRoutingBtn").addEventListener("click", openRoutingModal);
+        document.getElementById("openUpdateCheckBtn").addEventListener("click", openUpdateCheckModal);
+        document.getElementById("confirmCheckUpdateBtn").addEventListener("click", runGitHubUpdateCheck);
+        document.getElementById("importRadarrFiltersBtn").addEventListener("click", importRadarrFiltersUI);
+        document.getElementById("runRoutingPreviewBtn").addEventListener("click", runRoutingPreviewUI);
+        document.getElementById("browseRoutingRootBtn").addEventListener("click", () => browseForPath("folder", "routingRuleTargetRoot", "browseRoutingRootBtn", "routingStatus"));
+        document.getElementById("resetRoutingFormBtn").addEventListener("click", resetRoutingRuleForm);
+        document.getElementById("routingRuleForm").addEventListener("submit", (e) => {
+            e.preventDefault();
+            saveRoutingRuleForm();
+        });
+        document.getElementById("applyAllRoutingBtn").addEventListener("click", () => {
+            const actionable = routingPreviewMatches.filter(m => !m.ignored);
+            if (actionable.length === 0) return;
+            const btn = document.getElementById("applyAllRoutingBtn");
+            enqueueAction(`Routing Move (${actionable.length} movies)`, btn, () => applyRoutingItemsUI(actionable, btn));
+        });
+        document.getElementById("routingModal").addEventListener("click", (e) => {
+            const mvBtn = e.target.closest("[data-routing-move]");
+            if (mvBtn) {
+                reorderRoutingRuleUI(mvBtn.dataset.routingMove, mvBtn.dataset.dir);
+                return;
+            }
+            const edBtn = e.target.closest("[data-routing-edit]");
+            if (edBtn) {
+                editRoutingRule(edBtn.dataset.routingEdit);
+                return;
+            }
+            const delBtn = e.target.closest("[data-routing-delete]");
+            if (delBtn) {
+                deleteRoutingRuleUI(delBtn.dataset.routingDelete);
+                return;
+            }
+            const ignBtn = e.target.closest("[data-routing-ignore]");
+            if (ignBtn) {
+                toggleRoutingIgnoreUI(ignBtn.dataset.routingIgnore, ignBtn.dataset.ignoreVal === "1", ignBtn.dataset.ignoreTitle || "");
+                return;
+            }
+            const applyOne = e.target.closest("[data-routing-apply-one]");
+            if (applyOne) {
+                const idx = parseInt(applyOne.dataset.routingApplyOne, 10);
+                const item = routingPreviewMatches[idx];
+                if (item) {
+                    enqueueAction(`Route Move: ${item.title}`, applyOne, () => applyRoutingItemsUI([item], applyOne));
+                }
+            }
+        });
         document.getElementById("openJobQueueBtn").addEventListener("click", openJobQueueModal);
         document.getElementById("jobStatusBadge").addEventListener("click", openJobQueueModal);
         document.getElementById("refreshJobQueueBtn").addEventListener("click", fetchJobStatusNow);
@@ -4122,6 +4704,8 @@
         });
         document.getElementById("clearApiKeyBtn").addEventListener("click", clearSavedApiKey);
         document.getElementById("testRadarrBtn").addEventListener("click", testRadarr);
+        document.getElementById("testTorrentBtn").addEventListener("click", testTorrentClient);
+        document.getElementById("relaunchAdminBtn").addEventListener("click", relaunchAsAdmin);
 
         document.getElementById("syncRadarrBtn").addEventListener("click", syncFromRadarr);
         document.getElementById("addLibBtn").addEventListener("click", () => addFolder("library_folders", "newLibPath"));
